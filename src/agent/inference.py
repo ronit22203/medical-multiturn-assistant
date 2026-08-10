@@ -13,6 +13,16 @@ from src.engine.state_machine import RPMStateMachine
 from src.tools.registry import ToolRegistry
 
 
+GLOBAL_SAFETY_INVARIANT = (
+    "GLOBAL SAFETY INVARIANT: Do not provide medical advice, diagnose, or "
+    "characterize any vital sign as normal, safe, good, bad, high, or low. "
+    "Never reassure a user about a vital sign. Vital-sign interpretation and "
+    "escalation are exclusively handled by deterministic safety controls. "
+    "If a vital sign reaches you, acknowledge receipt without interpreting it "
+    "and continue only with the current workflow."
+)
+
+
 @dataclass(frozen=True)
 class InferenceMetrics:
     """Aggregate measurements captured across one agent turn."""
@@ -181,6 +191,15 @@ class RPMAgent:
                 metrics_note="LLM bypassed by the deterministic safety interceptor",
             )
 
+        if dfa.current_state == "escalated":
+            return AgentTurnResult(
+                message=(
+                    "Emergency escalation remains active. The automated workflow "
+                    "cannot continue until clinical support takes over."
+                ),
+                metrics_note="LLM bypassed because escalation is terminal",
+            )
+
         self.messages.append({"role": "user", "content": user_input})
 
         turn_started_at = perf_counter()
@@ -197,8 +216,11 @@ class RPMAgent:
         for _ in range(3):
             system_prompt, allowed_tools = dfa.get_context()
             tool_schemas = registry.get_tool_schemas(allowed_tools)
+            full_system_prompt = (
+                f"{system_prompt.rstrip()}\n\n{GLOBAL_SAFETY_INVARIANT}"
+            )
             messages_for_llm = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": full_system_prompt},
                 *self.messages,
             ]
 
