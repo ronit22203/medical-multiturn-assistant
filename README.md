@@ -1,13 +1,10 @@
 # RPM-Agent: Neuro-Symbolic Remote Patient Monitoring
 
-> **Status:** Active Development (72-Hour Sprint)
-> **Hardware Target:** RunPod (NVIDIA RTX 4090/A100) / Apple Silicon (M4 Unified Memory)
+Healthcare LLM wrappers fundamentally fail when they delegate workflow control to probabilistic models. This leads to hallucinated states, missed critical steps, and unvalidated medical guidance—a patient safety risk.
 
-Most healthcare LLM (Large Language Model) wrappers fail because they trust a probabilistic model to handle deterministic workflows. They hallucinate states, skip vital steps, and casually dispense unauthorized medical advice.
+**RPM-Agent** is an operational multi-turn assistant for Remote Patient Monitoring (RPM). It enforces deterministic safety and state progression by wrapping a lightweight open-source LLM (≤9B parameters) within a Deterministic Finite Automaton (DFA) state machine and an out-of-band safety interceptor.
 
-This repository solves that. **RPM-Agent** is a multi-turn chat assistant for Remote Patient Monitoring (RPM). It enforces strict safety and state progression by wrapping a lightweight open-source LLM (≤9B parameters) inside a Deterministic Finite Automaton (DFA) state machine and an out-of-band safety interceptor.
-
-The LLM is treated as a natural language NLU/NLG (Natural Language Understanding / Generation) engine: not the system controller.
+The LLM functions as a natural language NLU/NLG (Natural Language Understanding / Generation) component only—not the control system.
 
 ---
 
