@@ -35,7 +35,8 @@ def format_metrics(metrics: InferenceMetrics) -> str:
     )
 
     return (
-        f"TTFT: {ttft} | TPOT: {tpot} | Decode: {throughput} | "
+        f"Requests: {metrics.llm_requests} | TTFT: {ttft} | "
+        f"TPOT: {tpot} | Decode: {throughput} | "
         f"Latency: {metrics.total_latency_ms:.1f} ms | "
         f"Tokens: {prompt_tokens} in / {output_tokens} out / "
         f"{total_tokens} total | Estimated MBU: {estimated_mbu}"

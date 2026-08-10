@@ -15,11 +15,12 @@ from src.tools.registry import ToolRegistry
 
 @dataclass(frozen=True)
 class InferenceMetrics:
-    """Measurements captured from one streamed LLM response."""
+    """Aggregate measurements captured across one agent turn."""
 
     ttft_ms: float | None
     tpot_ms: float | None
     total_latency_ms: float
+    llm_requests: int
     prompt_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
@@ -70,7 +71,7 @@ class RPMAgent:
             if self.backend == "ollama" and self.memory_bandwidth_gbps is not None
             else None
         )
-        self.messages: list[dict[str, str]] = []
+        self.messages: list[dict[str, Any]] = []
 
     @staticmethod
     def _get_ollama_model_size(api_base: str, model_id: str) -> int:
@@ -117,6 +118,9 @@ class RPMAgent:
         prompt_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        decode_seconds: float,
+        decode_intervals: int,
+        llm_requests: int,
     ) -> InferenceMetrics:
         """Calculate latency, decode throughput, and estimated MBU."""
         ttft_ms = (
@@ -127,16 +131,9 @@ class RPMAgent:
         tpot_ms: float | None = None
         output_tokens_per_second: float | None = None
 
-        if (
-            first_output_at is not None
-            and output_tokens is not None
-            and output_tokens > 1
-        ):
-            decode_seconds = completed_at - first_output_at
-            if decode_seconds > 0:
-                decode_intervals = output_tokens - 1
-                tpot_ms = decode_seconds * 1_000 / decode_intervals
-                output_tokens_per_second = decode_intervals / decode_seconds
+        if decode_seconds > 0 and decode_intervals > 0:
+            tpot_ms = decode_seconds * 1_000 / decode_intervals
+            output_tokens_per_second = decode_intervals / decode_seconds
 
         estimated_mbu_percent = None
         if (
@@ -156,6 +153,7 @@ class RPMAgent:
             ttft_ms=ttft_ms,
             tpot_ms=tpot_ms,
             total_latency_ms=(completed_at - started_at) * 1_000,
+            llm_requests=llm_requests,
             prompt_tokens=prompt_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
@@ -184,119 +182,214 @@ class RPMAgent:
             )
 
         self.messages.append({"role": "user", "content": user_input})
-        system_prompt, allowed_tools = dfa.get_context()
-        tool_schemas = registry.get_tool_schemas(allowed_tools)
-        messages_for_llm = [
-            {"role": "system", "content": system_prompt},
-            *self.messages,
-        ]
 
-        api_kwargs: dict[str, Any] = {
-            "model": self.model_id,
-            "messages": messages_for_llm,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        if tool_schemas:
-            api_kwargs["tools"] = tool_schemas
-            api_kwargs["tool_choice"] = "auto"
+        turn_started_at = perf_counter()
+        first_turn_output_at: float | None = None
+        aggregate_prompt_tokens = 0
+        aggregate_output_tokens = 0
+        aggregate_total_tokens = 0
+        usage_complete = True
+        aggregate_decode_seconds = 0.0
+        aggregate_decode_intervals = 0
+        llm_requests = 0
+        metrics: InferenceMetrics | None = None
 
-        started_at = perf_counter()
-        first_output_at: float | None = None
-        content_parts: list[str] = []
-        streamed_tool_calls: dict[int, dict[str, str]] = {}
-        prompt_tokens: int | None = None
-        output_tokens: int | None = None
-        total_tokens: int | None = None
+        for _ in range(3):
+            system_prompt, allowed_tools = dfa.get_context()
+            tool_schemas = registry.get_tool_schemas(allowed_tools)
+            messages_for_llm = [
+                {"role": "system", "content": system_prompt},
+                *self.messages,
+            ]
 
-        try:
-            stream = self.client.chat.completions.create(**api_kwargs)
-            for chunk in stream:
-                received_at = perf_counter()
-                if chunk.usage is not None:
-                    prompt_tokens = chunk.usage.prompt_tokens
-                    output_tokens = chunk.usage.completion_tokens
-                    total_tokens = chunk.usage.total_tokens
+            api_kwargs: dict[str, Any] = {
+                "model": self.model_id,
+                "messages": messages_for_llm,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if tool_schemas:
+                api_kwargs["tools"] = tool_schemas
+                api_kwargs["tool_choice"] = "auto"
 
-                for choice in chunk.choices:
-                    delta = choice.delta
-                    if (delta.content or delta.tool_calls) and first_output_at is None:
-                        first_output_at = received_at
-                    if delta.content:
-                        content_parts.append(delta.content)
+            request_first_output_at: float | None = None
+            content_parts: list[str] = []
+            streamed_tool_calls: dict[int, dict[str, str]] = {}
+            request_prompt_tokens: int | None = None
+            request_output_tokens: int | None = None
+            request_total_tokens: int | None = None
+            llm_requests += 1
 
-                    for tool_delta in delta.tool_calls or []:
-                        tool_call = streamed_tool_calls.setdefault(
-                            tool_delta.index,
-                            {"name": "", "arguments": ""},
-                        )
-                        if tool_delta.function is not None:
-                            tool_call["name"] += tool_delta.function.name or ""
-                            tool_call["arguments"] += (
-                                tool_delta.function.arguments or ""
+            try:
+                stream = self.client.chat.completions.create(**api_kwargs)
+                for chunk in stream:
+                    received_at = perf_counter()
+                    if chunk.usage is not None:
+                        request_prompt_tokens = chunk.usage.prompt_tokens
+                        request_output_tokens = chunk.usage.completion_tokens
+                        request_total_tokens = chunk.usage.total_tokens
+
+                    for choice in chunk.choices:
+                        delta = choice.delta
+                        if delta.content or delta.tool_calls:
+                            if request_first_output_at is None:
+                                request_first_output_at = received_at
+                            if first_turn_output_at is None:
+                                first_turn_output_at = received_at
+
+                        if delta.content:
+                            content_parts.append(delta.content)
+
+                        for tool_delta in delta.tool_calls or []:
+                            tool_call = streamed_tool_calls.setdefault(
+                                tool_delta.index,
+                                {"id": "", "name": "", "arguments": ""},
                             )
-        except OpenAIError as exc:
-            return AgentTurnResult(
-                message=f"[System Error] LLM backend request failed: {exc}",
-                metrics_note="Request failed before complete metrics were available",
+                            tool_call["id"] += tool_delta.id or ""
+                            if tool_delta.function is not None:
+                                tool_call["name"] += (
+                                    tool_delta.function.name or ""
+                                )
+                                tool_call["arguments"] += (
+                                    tool_delta.function.arguments or ""
+                                )
+            except OpenAIError as exc:
+                return AgentTurnResult(
+                    message=f"[System Error] LLM backend request failed: {exc}",
+                    metrics=metrics,
+                    metrics_note=(
+                        "Request failed before complete metrics were available"
+                    ),
+                )
+
+            request_completed_at = perf_counter()
+            if (
+                request_prompt_tokens is None
+                or request_output_tokens is None
+                or request_total_tokens is None
+            ):
+                usage_complete = False
+            else:
+                aggregate_prompt_tokens += request_prompt_tokens
+                aggregate_output_tokens += request_output_tokens
+                aggregate_total_tokens += request_total_tokens
+
+                if (
+                    request_first_output_at is not None
+                    and request_output_tokens > 1
+                ):
+                    aggregate_decode_seconds += (
+                        request_completed_at - request_first_output_at
+                    )
+                    aggregate_decode_intervals += request_output_tokens - 1
+
+            metrics = self._build_metrics(
+                started_at=turn_started_at,
+                first_output_at=first_turn_output_at,
+                completed_at=request_completed_at,
+                prompt_tokens=(
+                    aggregate_prompt_tokens if usage_complete else None
+                ),
+                output_tokens=(
+                    aggregate_output_tokens if usage_complete else None
+                ),
+                total_tokens=aggregate_total_tokens if usage_complete else None,
+                decode_seconds=aggregate_decode_seconds,
+                decode_intervals=aggregate_decode_intervals,
+                llm_requests=llm_requests,
             )
 
-        completed_at = perf_counter()
-        metrics = self._build_metrics(
-            started_at=started_at,
-            first_output_at=first_output_at,
-            completed_at=completed_at,
-            prompt_tokens=prompt_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
+            if streamed_tool_calls:
+                parsed_tool_calls: list[tuple[str, str, dict[str, Any]]] = []
+                assistant_tool_calls: list[dict[str, Any]] = []
 
-        if streamed_tool_calls:
-            for tool_call in streamed_tool_calls.values():
-                tool_name = tool_call["name"]
-                try:
-                    tool_args = json.loads(tool_call["arguments"])
-                except json.JSONDecodeError:
-                    return AgentTurnResult(
-                        message=(
-                            "[System Error] LLM generated malformed JSON "
-                            f"for tool '{tool_name}'."
-                        ),
-                        metrics=metrics,
+                for tool_call in streamed_tool_calls.values():
+                    tool_call_id = tool_call["id"]
+                    tool_name = tool_call["name"]
+                    if not tool_call_id or not tool_name:
+                        return AgentTurnResult(
+                            message=(
+                                "[System Error] LLM generated an incomplete "
+                                "tool call."
+                            ),
+                            metrics=metrics,
+                        )
+
+                    try:
+                        raw_tool_args = json.loads(tool_call["arguments"])
+                    except json.JSONDecodeError:
+                        return AgentTurnResult(
+                            message=(
+                                "[System Error] LLM generated malformed JSON "
+                                f"for tool '{tool_name}'."
+                            ),
+                            metrics=metrics,
+                        )
+                    if not isinstance(raw_tool_args, dict):
+                        return AgentTurnResult(
+                            message=(
+                                "[System Error] LLM generated non-object "
+                                f"arguments for tool '{tool_name}'."
+                            ),
+                            metrics=metrics,
+                        )
+
+                    parsed_tool_calls.append(
+                        (tool_call_id, tool_name, raw_tool_args)
+                    )
+                    assistant_tool_calls.append(
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": tool_call["arguments"],
+                            },
+                        }
                     )
 
-                execution_result = registry.execute_tool(tool_name, tool_args)
-                transition_msg = dfa.process_tool_execution(
-                    tool_name,
-                    execution_result,
-                )
                 self.messages.append(
                     {
                         "role": "assistant",
-                        "content": (
-                            f"Executed {tool_name}: {execution_result['message']}"
-                        ),
+                        "content": "".join(content_parts) or None,
+                        "tool_calls": assistant_tool_calls,
                     }
                 )
+
+                for tool_call_id, tool_name, tool_args in parsed_tool_calls:
+                    execution_result = registry.execute_tool(
+                        tool_name,
+                        tool_args,
+                    )
+                    dfa.process_tool_execution(tool_name, execution_result)
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": json.dumps(execution_result),
+                        }
+                    )
+
+                continue
+
+            response_content = "".join(content_parts)
+            if response_content:
+                self.messages.append(
+                    {"role": "assistant", "content": response_content}
+                )
                 return AgentTurnResult(
-                    message=(
-                        f"Tool Executed: {tool_name}\n"
-                        f"Result: {execution_result['message']}\n"
-                        f"{transition_msg}"
-                    ),
+                    message=response_content,
                     metrics=metrics,
                 )
 
-        response_content = "".join(content_parts)
-        if response_content:
-            self.messages.append(
-                {"role": "assistant", "content": response_content}
+            return AgentTurnResult(
+                message="[System] No valid response generated by the LLM.",
+                metrics=metrics,
             )
-            return AgentTurnResult(message=response_content, metrics=metrics)
 
         return AgentTurnResult(
-            message="[System] No valid response generated by the LLM.",
+            message="[System] LLM tool iteration limit reached.",
             metrics=metrics,
         )

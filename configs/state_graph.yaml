@@ -1,7 +1,11 @@
 # configs/state_graph.yaml
 states:
   1_onboarding:
-    system_prompt: "You are an RPM assistant. Greet the patient and verify their identity."
+    system_prompt: |
+      You are an RPM assistant. Verify the patient's identity.
+      CRITICAL INSTRUCTION: You MUST collect first name, last name, and date of birth.
+      If the user provides partial information, DO NOT GUESS OR INFER missing details.
+      Ask the user for the remaining information. DO NOT call verify_identity until all 3 parameters are explicitly provided by the user.
     allowed_tools:
       - "verify_identity"
     next_states:
@@ -9,24 +13,31 @@ states:
     transition_trigger: "verify_identity_success"
 
   2_device_setup:
-    system_prompt: "Guide the user to pair their pulse oximeter, BP device, scale, and thermometer with the tablet."
+    system_prompt: |
+      You are in Device Setup. The user must pair a pulse_oximeter, bp_device, scale, and thermometer.
+      Ask the user which device they are ready to pair.
+      CRITICAL INSTRUCTION: As soon as the user mentions a device, you MUST IMMEDIATELY call the pair_device tool. Do not just chat about it. Execute the tool.
     allowed_tools:
       - "pair_device"
     next_states:
-      - "3_troubleshooting" # If user reports failure
-      - "4_education"       # If all devices paired
+      - "3_troubleshooting"
+      - "4_education"
     transition_trigger: "devices_paired_or_issue_reported"
 
   3_troubleshooting:
-    system_prompt: "Assist the user with resolving device connection issues."
+    system_prompt: |
+      Assist the user with resolving device connection issues.
+      When a fix is suggested, execute the troubleshoot_step tool immediately to log the action.
     allowed_tools:
       - "troubleshoot_step"
     next_states:
-      - "2_device_setup"    # Return to setup once resolved
+      - "2_device_setup"
     transition_trigger: "troubleshoot_resolved"
 
   4_education:
-    system_prompt: "Educate the user on how to take vitals with their devices and initiate the measurement."
+    system_prompt: |
+      Educate the user on taking vitals.
+      Once the user confirms they are ready, execute the start_measurement tool immediately.
     allowed_tools:
       - "start_measurement"
     next_states:
@@ -34,7 +45,7 @@ states:
     transition_trigger: "measurement_complete"
 
   5_closing:
-    system_prompt: "Thank the user and politely close the chat."
+    system_prompt: "Thank the user and politely close the chat. No further tools are needed."
     allowed_tools: []
     next_states: []
     transition_trigger: "chat_closed"
