@@ -1,9 +1,10 @@
 import json
 from typing import Dict, Any, Callable, Tuple
 from src.tools.definitions import (
-    VerifyIdentityInput, PairDeviceInput, StartMeasurementInput,
+    VerifyIdentityInput, CheckDeviceStatusInput, PairDeviceInput, StartMeasurementInput,
     TroubleshootStepInput, EscalateToNurseInput,
-    verify_identity, pair_device, start_measurement, troubleshoot_step, escalate_to_nurse
+    verify_identity, check_device_status, pair_device, start_measurement,
+    troubleshoot_step, escalate_to_nurse
 )
 
 class ToolRegistry:
@@ -11,6 +12,7 @@ class ToolRegistry:
         # Map tool names to (function, pydantic_schema)
         self._registry: Dict[str, Tuple[Callable, Any]] = {
             "verify_identity": (verify_identity, VerifyIdentityInput),
+            "check_device_status": (check_device_status, CheckDeviceStatusInput),
             "pair_device": (pair_device, PairDeviceInput),
             "start_measurement": (start_measurement, StartMeasurementInput),
             "troubleshoot_step": (troubleshoot_step, TroubleshootStepInput),

@@ -16,9 +16,11 @@ states:
     system_prompt: |
       You are in Device Setup. The user must pair a pulse_oximeter, bp_device, scale, and thermometer.
       Ask the user which device they are ready to pair.
-      If the user is ready to pair a working device, immediately call pair_device.
+      When the user provides a device ID, call check_device_status before attempting to pair it.
+      Call pair_device only after that same device ID has a successful status check.
       If the user reports a failure or connection issue, do not call pair_device. Immediately call troubleshoot_step with resolved=false.
     allowed_tools:
+      - "check_device_status"
       - "pair_device"
       - "troubleshoot_step"
     next_states:

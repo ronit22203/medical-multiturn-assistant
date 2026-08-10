@@ -11,6 +11,7 @@ class RPMStateMachine:
 
         self.states: dict[str, dict[str, Any]] = config.get("states", {})
         self.current_state = "1_onboarding"
+        self.checked_devices: set[str] = set()
         self.paired_devices: set[str] = set()
         self.required_devices = {
             "pulse_oximeter",
@@ -24,7 +25,20 @@ class RPMStateMachine:
         """Return the current state's system prompt and permitted tools."""
         state_data = self.states.get(self.current_state, {})
         prompt = state_data.get("system_prompt", "You are an RPM assistant.")
-        allowed_tools = state_data.get("allowed_tools", [])
+        allowed_tools = list(state_data.get("allowed_tools", []))
+
+        if self.current_state == "2_device_setup":
+            if self.checked_devices:
+                checked_ids = ", ".join(sorted(self.checked_devices))
+                prompt = (
+                    f"{prompt.rstrip()}\nStatus already checked for device IDs: "
+                    f"{checked_ids}."
+                )
+            else:
+                allowed_tools = [
+                    tool for tool in allowed_tools if tool != "pair_device"
+                ]
+
         return prompt, allowed_tools
 
     def process_tool_execution(
@@ -45,9 +59,17 @@ class RPMStateMachine:
             self.current_state = "2_device_setup"
 
         elif self.current_state == "2_device_setup":
-            if tool_name == "pair_device":
+            if tool_name == "check_device_status":
                 device_id = result.get("device_id", "")
                 if isinstance(device_id, str) and device_id:
+                    self.checked_devices.add(device_id)
+            elif tool_name == "pair_device":
+                device_id = result.get("device_id", "")
+                if (
+                    isinstance(device_id, str)
+                    and device_id
+                    and device_id in self.checked_devices
+                ):
                     self.paired_devices.add(device_id)
                 if self.paired_devices:
                     self.current_state = "4_education"
@@ -73,6 +95,21 @@ class RPMStateMachine:
                 f"{self.current_state}"
             )
         return f"[System] State maintained: {self.current_state}"
+
+    def validate_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        """Return an error when a tool call violates workflow prerequisites."""
+        if self.current_state == "2_device_setup" and tool_name == "pair_device":
+            device_id = arguments.get("device_id")
+            if not isinstance(device_id, str) or device_id not in self.checked_devices:
+                return (
+                    "pair_device requires a successful check_device_status call "
+                    "for the same device_id"
+                )
+        return None
 
     def _enter_troubleshooting(self, return_state: str) -> None:
         """Enter troubleshooting while preserving the interrupted workflow state."""

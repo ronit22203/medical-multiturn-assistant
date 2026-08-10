@@ -23,7 +23,7 @@ class RPMStateMachineTests(unittest.TestCase):
             )
         )
 
-    def test_device_setup_exposes_troubleshooting(self) -> None:
+    def test_device_setup_requires_status_check_before_pairing(self) -> None:
         dfa = RPMStateMachine()
         dfa.current_state = "2_device_setup"
 
@@ -31,8 +31,52 @@ class RPMStateMachineTests(unittest.TestCase):
 
         self.assertEqual(
             allowed_tools,
-            ["pair_device", "troubleshoot_step"],
+            ["check_device_status", "troubleshoot_step"],
         )
+
+        dfa.process_tool_execution(
+            "check_device_status",
+            {
+                "status": "success",
+                "device_id": "OXI-1023",
+                "pairing_status": "not_paired",
+            },
+        )
+        _, allowed_tools = dfa.get_context()
+        self.assertEqual(
+            allowed_tools,
+            ["check_device_status", "pair_device", "troubleshoot_step"],
+        )
+
+        dfa.process_tool_execution(
+            "pair_device",
+            {
+                "status": "success",
+                "device_id": "OXI-1023",
+                "paired": True,
+            },
+        )
+        self.assertEqual(dfa.current_state, "4_education")
+
+    def test_unchecked_device_cannot_advance_to_education(self) -> None:
+        dfa = RPMStateMachine()
+        dfa.current_state = "2_device_setup"
+
+        error = dfa.validate_tool_call(
+            "pair_device",
+            {"device_id": "OXI-1023"},
+        )
+        dfa.process_tool_execution(
+            "pair_device",
+            {
+                "status": "success",
+                "device_id": "OXI-1023",
+                "paired": True,
+            },
+        )
+
+        self.assertIsNotNone(error)
+        self.assertEqual(dfa.current_state, "2_device_setup")
 
     def test_setup_troubleshooting_resumes_device_setup(self) -> None:
         dfa = RPMStateMachine()

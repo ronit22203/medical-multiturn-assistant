@@ -523,10 +523,17 @@ class RPMAgent:
                 )
 
                 for tool_call_id, tool_name, tool_args in parsed_tool_calls:
-                    execution_result = registry.execute_tool(
-                        tool_name,
-                        tool_args,
-                    )
+                    workflow_error = dfa.validate_tool_call(tool_name, tool_args)
+                    if workflow_error is not None:
+                        execution_result = {
+                            "status": "error",
+                            "message": workflow_error,
+                        }
+                    else:
+                        execution_result = registry.execute_tool(
+                            tool_name,
+                            tool_args,
+                        )
                     dfa.process_tool_execution(tool_name, execution_result)
                     self.messages.append(
                         {

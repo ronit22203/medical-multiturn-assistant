@@ -8,6 +8,13 @@ class VerifyIdentityInput(BaseModel):
     last_name: str = Field(..., description="Last name of the patient")
     dob: str = Field(..., description="Date of birth in YYYY-MM-DD or MM/DD/YYYY format")
 
+
+class CheckDeviceStatusInput(BaseModel):
+    """Check a device's pairing status before attempting to pair it."""
+
+    device_id: str = Field(..., description="Unique hardware identifier")
+
+
 class PairDeviceInput(BaseModel):
     device_id: str = Field(..., description="Unique hardware identifier or name (e.g., pulse_ox_01, bp_monitor)")
 
@@ -37,6 +44,16 @@ def verify_identity(first_name: str, last_name: str, dob: str) -> Dict[str, Any]
         "verified": True,
         "message": f"Identity verified for {first_name} {last_name}, DOB: {dob}."
     }
+
+
+def check_device_status(device_id: str) -> Dict[str, Any]:
+    return {
+        "status": "success",
+        "device_id": device_id,
+        "pairing_status": "not_paired",
+        "message": f"Device '{device_id}' status checked: not paired."
+    }
+
 
 def pair_device(device_id: str) -> Dict[str, Any]:
     return {

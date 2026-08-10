@@ -112,6 +112,9 @@ data/generated/
 data/synthetic/
 data/eval/
 data/metrics/
+!data/synthetic/
+data/synthetic/*
+!data/synthetic/sft_dataset.jsonl
 outputs/
 artifacts/
 reports/
