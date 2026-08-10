@@ -8,6 +8,7 @@ from urllib.request import urlopen
 
 import yaml
 from openai import OpenAI, OpenAIError
+from pydantic import BaseModel, ConfigDict
 
 from src.engine.interceptor import SafetyInterceptor
 from src.engine.state_machine import RPMStateMachine
@@ -29,6 +30,33 @@ DEVICE_ISSUE_PATTERN = re.compile(
     r"blinking\s+red|red\s+(?:status\s+)?light)\b",
     re.IGNORECASE,
 )
+PUBLIC_STATE_NAMES = {
+    "1_onboarding": "onboarding",
+    "2_device_setup": "device_setup",
+    "3_troubleshooting": "troubleshooting",
+    "4_education": "education",
+    "5_closing": "closing",
+    "escalated": "escalated",
+}
+
+
+class ResponseToolCall(BaseModel):
+    """Tool call exposed through the assignment response contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    arguments: dict[str, Any]
+
+
+class StructuredAgentResponse(BaseModel):
+    """Stable response envelope consumed by the evaluator and chat interface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: str
+    assistant_message: str
+    tool_call: ResponseToolCall | None = None
 
 
 @dataclass(frozen=True)
@@ -50,9 +78,18 @@ class InferenceMetrics:
 class AgentTurnResult:
     """Agent output and any performance measurements available for the turn."""
 
-    message: str
+    response: StructuredAgentResponse
     metrics: InferenceMetrics | None = None
     metrics_note: str | None = None
+
+    @property
+    def message(self) -> str:
+        """Return the natural-language assistant message."""
+        return self.response.assistant_message
+
+    def model_dump_json(self) -> str:
+        """Serialize the exact assignment response envelope."""
+        return self.response.model_dump_json()
 
 
 class RPMAgent:
@@ -90,6 +127,27 @@ class RPMAgent:
             else None
         )
         self.messages: list[dict[str, Any]] = []
+
+    @staticmethod
+    def _turn_result(
+        state: str,
+        message: str,
+        tool_call: ResponseToolCall | None = None,
+        metrics: InferenceMetrics | None = None,
+        metrics_note: str | None = None,
+    ) -> AgentTurnResult:
+        """Build and validate a structured response for one completed turn."""
+        public_state = PUBLIC_STATE_NAMES.get(state, state)
+        response = StructuredAgentResponse(
+            state=public_state,
+            assistant_message=message,
+            tool_call=tool_call,
+        )
+        return AgentTurnResult(
+            response=response,
+            metrics=metrics,
+            metrics_note=metrics_note,
+        )
 
     @staticmethod
     def _get_ollama_model_size(api_base: str, model_id: str) -> int:
@@ -187,20 +245,31 @@ class RPMAgent:
         interceptor: SafetyInterceptor,
     ) -> AgentTurnResult:
         """Process one user turn and return its response with telemetry."""
+        turn_state = dfa.current_state
         safety_check = interceptor.inspect(user_input)
         if safety_check.is_red_flag:
             dfa.force_escalation()
+            escalation_args = {"reason": safety_check.reason}
             escalation_result = registry.execute_tool(
                 "escalate_to_nurse",
-                {"reason": safety_check.reason},
+                escalation_args,
             )
-            return AgentTurnResult(
-                message=f"EMERGENCY PROTOCOL ENGAGED: {escalation_result['message']}",
+            return self._turn_result(
+                state=dfa.current_state,
+                message=(
+                    "EMERGENCY PROTOCOL ENGAGED: "
+                    f"{escalation_result['message']}"
+                ),
+                tool_call=ResponseToolCall(
+                    name="escalate_to_nurse",
+                    arguments=escalation_args,
+                ),
                 metrics_note="LLM bypassed by the deterministic safety interceptor",
             )
 
         if dfa.current_state == "escalated":
-            return AgentTurnResult(
+            return self._turn_result(
+                state=dfa.current_state,
                 message=(
                     "Emergency escalation remains active. The automated workflow "
                     "cannot continue until clinical support takes over."
@@ -210,6 +279,7 @@ class RPMAgent:
 
         self.messages.append({"role": "user", "content": user_input})
         controller_context: str | None = None
+        response_tool_call: ResponseToolCall | None = None
 
         if (
             dfa.current_state in {"2_device_setup", "4_education"}
@@ -223,7 +293,8 @@ class RPMAgent:
                 },
             )
             if issue_result.get("status") != "success":
-                return AgentTurnResult(
+                return self._turn_result(
+                    state=turn_state,
                     message=(
                         "[System Error] Unable to log the reported device issue: "
                         f"{issue_result.get('message', 'unknown tool error')}"
@@ -232,6 +303,13 @@ class RPMAgent:
                 )
 
             dfa.process_tool_execution("troubleshoot_step", issue_result)
+            response_tool_call = ResponseToolCall(
+                name="troubleshoot_step",
+                arguments={
+                    "step_id": "device_issue_reported",
+                    "resolved": False,
+                },
+            )
             controller_context = (
                 "DETERMINISTIC CONTROLLER EVENT: A device failure was detected "
                 "and logged before this request. The workflow is now in "
@@ -279,6 +357,7 @@ class RPMAgent:
             if tool_schemas:
                 api_kwargs["tools"] = tool_schemas
                 api_kwargs["tool_choice"] = "auto"
+                api_kwargs["parallel_tool_calls"] = False
 
             request_first_output_at: float | None = None
             content_parts: list[str] = []
@@ -322,8 +401,10 @@ class RPMAgent:
                                     tool_delta.function.arguments or ""
                                 )
             except OpenAIError as exc:
-                return AgentTurnResult(
+                return self._turn_result(
+                    state=turn_state,
                     message=f"[System Error] LLM backend request failed: {exc}",
+                    tool_call=response_tool_call,
                     metrics=metrics,
                     metrics_note=(
                         "Request failed before complete metrics were available"
@@ -368,6 +449,16 @@ class RPMAgent:
             )
 
             if streamed_tool_calls:
+                if len(streamed_tool_calls) > 1:
+                    return self._turn_result(
+                        state=turn_state,
+                        message=(
+                            "[System Error] LLM generated multiple tool calls; "
+                            "only one tool call is permitted per turn."
+                        ),
+                        metrics=metrics,
+                    )
+
                 parsed_tool_calls: list[tuple[str, str, dict[str, Any]]] = []
                 assistant_tool_calls: list[dict[str, Any]] = []
 
@@ -375,7 +466,8 @@ class RPMAgent:
                     tool_call_id = tool_call["id"]
                     tool_name = tool_call["name"]
                     if not tool_call_id or not tool_name:
-                        return AgentTurnResult(
+                        return self._turn_result(
+                            state=turn_state,
                             message=(
                                 "[System Error] LLM generated an incomplete "
                                 "tool call."
@@ -386,7 +478,8 @@ class RPMAgent:
                     try:
                         raw_tool_args = json.loads(tool_call["arguments"])
                     except json.JSONDecodeError:
-                        return AgentTurnResult(
+                        return self._turn_result(
+                            state=turn_state,
                             message=(
                                 "[System Error] LLM generated malformed JSON "
                                 f"for tool '{tool_name}'."
@@ -394,7 +487,8 @@ class RPMAgent:
                             metrics=metrics,
                         )
                     if not isinstance(raw_tool_args, dict):
-                        return AgentTurnResult(
+                        return self._turn_result(
+                            state=turn_state,
                             message=(
                                 "[System Error] LLM generated non-object "
                                 f"arguments for tool '{tool_name}'."
@@ -404,6 +498,10 @@ class RPMAgent:
 
                     parsed_tool_calls.append(
                         (tool_call_id, tool_name, raw_tool_args)
+                    )
+                    response_tool_call = ResponseToolCall(
+                        name=tool_name,
+                        arguments=raw_tool_args,
                     )
                     assistant_tool_calls.append(
                         {
@@ -452,17 +550,23 @@ class RPMAgent:
                 self.messages.append(
                     {"role": "assistant", "content": response_content}
                 )
-                return AgentTurnResult(
+                return self._turn_result(
+                    state=turn_state,
                     message=response_content,
+                    tool_call=response_tool_call,
                     metrics=metrics,
                 )
 
-            return AgentTurnResult(
+            return self._turn_result(
+                state=turn_state,
                 message="[System] No valid response generated by the LLM.",
+                tool_call=response_tool_call,
                 metrics=metrics,
             )
 
-        return AgentTurnResult(
+        return self._turn_result(
+            state=turn_state,
             message="[System] LLM tool iteration limit reached.",
+            tool_call=response_tool_call,
             metrics=metrics,
         )

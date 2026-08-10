@@ -78,7 +78,7 @@ def main() -> None:
             # Route input through the architecture
             result = agent.process_turn(user_input, dfa, registry, interceptor)
 
-            print(f"\n[Agent]: {result.message}")
+            print(f"\n[Agent]: {result.model_dump_json()}")
             print(f"[DFA Tracker]: Currently in {dfa.current_state}")
             if result.metrics is not None:
                 print(f"[Performance]: {format_metrics(result.metrics)}")
