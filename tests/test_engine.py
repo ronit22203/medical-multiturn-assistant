@@ -12,18 +12,18 @@ from src.engine.interceptor import SafetyInterceptor
 
 def run_tests():
     print("--- INITIATING SYSTEM TESTS ---\n")
-    
+
     # 1. Test the Safety Interceptor
     print("[TEST 1] Out-of-Band Safety Interceptor")
     interceptor = SafetyInterceptor()
-    
+
     test_cases = [
         "Hello, I am ready to start my onboarding.",
         "I can't breathe very well right now.",
         "My scale says 150 lbs and my SpO2 is 88%.",
         "BP is 195/110, feeling fine otherwise."
     ]
-    
+
     for case in test_cases:
         result = interceptor.inspect(case)
         status = "RED FLAG" if result.is_red_flag else "PASS"
@@ -34,7 +34,7 @@ def run_tests():
     print("--------------------------------------------------")
     print("[TEST 2] Pydantic Schema Validation & Execution")
     registry = ToolRegistry()
-    
+
     # Case A: Valid Input
     valid_payload = {
         "first_name": "John",
@@ -44,7 +44,7 @@ def run_tests():
     print("Executing 'verify_identity' with VALID payload...")
     result_valid = registry.execute_tool("verify_identity", valid_payload)
     print(f" -> Output: {json.dumps(result_valid, indent=2)}\n")
-    
+
     # Case B: Invalid Input (Missing 'dob')
     invalid_payload = {
         "first_name": "Jane",
@@ -54,6 +54,26 @@ def run_tests():
     result_invalid = registry.execute_tool("verify_identity", invalid_payload)
     print(f" -> Output: {json.dumps(result_invalid, indent=2)}\n")
 
+# 3. Test the State Machine Transitions
+    print("--------------------------------------------------")
+    print("[TEST 3] DFA State Transitions")
+    from src.engine.state_machine import RPMStateMachine
+
+    dfa = RPMStateMachine()
+    print(f"Initial State: {dfa.current_state}")
+
+    prompt, tools = dfa.get_context()
+    print(f"Allowed Tools in {dfa.current_state}: {tools}")
+
+    # Simulate LLM successfully calling verify_identity
+    transition_msg = dfa.process_tool_execution("verify_identity", {"status": "success"})
+    print(transition_msg)
+
+    prompt, tools = dfa.get_context()
+    print(f"New Allowed Tools in {dfa.current_state}: {tools}")
+
 
 if __name__ == "__main__":
     run_tests()
+
+
