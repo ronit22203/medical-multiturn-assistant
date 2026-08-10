@@ -8,6 +8,7 @@ endpoints:
     model_id: "qwen2.5:7b"
     max_tokens: 512
     temperature: 0.1
+    memory_bandwidth_gbps: 120.0  # Apple M4 unified-memory bandwidth
 
   prod:
     backend: vllm
