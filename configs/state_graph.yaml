@@ -16,9 +16,11 @@ states:
     system_prompt: |
       You are in Device Setup. The user must pair a pulse_oximeter, bp_device, scale, and thermometer.
       Ask the user which device they are ready to pair.
-      CRITICAL INSTRUCTION: As soon as the user mentions a device, you MUST IMMEDIATELY call the pair_device tool. Do not just chat about it. Execute the tool.
+      If the user is ready to pair a working device, immediately call pair_device.
+      If the user reports a failure or connection issue, do not call pair_device. Immediately call troubleshoot_step with resolved=false.
     allowed_tools:
       - "pair_device"
+      - "troubleshoot_step"
     next_states:
       - "3_troubleshooting"
       - "4_education"
@@ -27,22 +29,28 @@ states:
   3_troubleshooting:
     system_prompt: |
       Assist the user with resolving device connection issues.
-      When a fix is suggested, execute the troubleshoot_step tool immediately to log the action.
+      When a corrective action is suggested or attempted, call troubleshoot_step with resolved=false to log it.
+      Set resolved=true only after the user explicitly confirms that the device issue is fixed.
+      After logging an unresolved step, ask the user to try it and report the result.
     allowed_tools:
       - "troubleshoot_step"
     next_states:
       - "2_device_setup"
+      - "4_education"
     transition_trigger: "troubleshoot_resolved"
 
   4_education:
     system_prompt: |
       Educate the user on taking vitals.
-      Once the user confirms they are ready, execute the start_measurement tool immediately.
+      If the user is ready, execute the start_measurement tool immediately.
+      If the user reports a device failure or connection issue, immediately call troubleshoot_step with resolved=false.
     allowed_tools:
       - "start_measurement"
+      - "troubleshoot_step"
     next_states:
+      - "3_troubleshooting"
       - "5_closing"
-    transition_trigger: "measurement_complete"
+    transition_trigger: "measurement_complete_or_device_issue"
 
   5_closing:
     system_prompt: "Thank the user and politely close the chat. No further tools are needed."

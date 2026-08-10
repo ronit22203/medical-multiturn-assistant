@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -20,6 +21,13 @@ GLOBAL_SAFETY_INVARIANT = (
     "escalation are exclusively handled by deterministic safety controls. "
     "If a vital sign reaches you, acknowledge receipt without interpreting it "
     "and continue only with the current workflow."
+)
+DEVICE_ISSUE_PATTERN = re.compile(
+    r"\b(?:(?:cannot|can't|won't|not|isn't|stopped)\s+"
+    r"(?:pair(?:ing)?|connect(?:ing)?|work(?:ing)?)|"
+    r"failed|failure|error|offline|disconnected|broken|"
+    r"blinking\s+red|red\s+(?:status\s+)?light)\b",
+    re.IGNORECASE,
 )
 
 
@@ -201,6 +209,36 @@ class RPMAgent:
             )
 
         self.messages.append({"role": "user", "content": user_input})
+        controller_context: str | None = None
+
+        if (
+            dfa.current_state in {"2_device_setup", "4_education"}
+            and DEVICE_ISSUE_PATTERN.search(user_input)
+        ):
+            issue_result = registry.execute_tool(
+                "troubleshoot_step",
+                {
+                    "step_id": "device_issue_reported",
+                    "resolved": False,
+                },
+            )
+            if issue_result.get("status") != "success":
+                return AgentTurnResult(
+                    message=(
+                        "[System Error] Unable to log the reported device issue: "
+                        f"{issue_result.get('message', 'unknown tool error')}"
+                    ),
+                    metrics_note="LLM bypassed because deterministic routing failed",
+                )
+
+            dfa.process_tool_execution("troubleshoot_step", issue_result)
+            controller_context = (
+                "DETERMINISTIC CONTROLLER EVENT: A device failure was detected "
+                "and logged before this request. The workflow is now in "
+                "troubleshooting. For this response only, do not call a tool. "
+                "Give one concrete troubleshooting action and ask the user to "
+                "report whether it resolved the issue."
+            )
 
         turn_started_at = perf_counter()
         first_turn_output_at: float | None = None
@@ -215,10 +253,16 @@ class RPMAgent:
 
         for _ in range(3):
             system_prompt, allowed_tools = dfa.get_context()
+            if controller_context is not None:
+                allowed_tools = []
             tool_schemas = registry.get_tool_schemas(allowed_tools)
             full_system_prompt = (
                 f"{system_prompt.rstrip()}\n\n{GLOBAL_SAFETY_INVARIANT}"
             )
+            if controller_context is not None:
+                full_system_prompt = (
+                    f"{full_system_prompt}\n\n{controller_context}"
+                )
             messages_for_llm = [
                 {"role": "system", "content": full_system_prompt},
                 *self.messages,
@@ -394,6 +438,13 @@ class RPMAgent:
                         }
                     )
 
+                controller_context = (
+                    "DETERMINISTIC CONTROLLER EVENT: The requested tool calls "
+                    "have already executed and the workflow state has been "
+                    "updated. For this response only, do not call another tool. "
+                    "Explain the result and the current next step, then wait for "
+                    "a new user response before taking another action."
+                )
                 continue
 
             response_content = "".join(content_parts)

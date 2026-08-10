@@ -17,6 +17,12 @@ class StartMeasurementInput(BaseModel):
 
 class TroubleshootStepInput(BaseModel):
     step_id: str = Field(..., description="Troubleshooting step identifier or action taken")
+    resolved: bool = Field(
+        default=False,
+        description=(
+            "True only when the user explicitly confirms the device issue is fixed"
+        ),
+    )
 
 class EscalateToNurseInput(BaseModel):
     reason: str = Field(..., description="Detailed clinical reason or red flag that triggered escalation")
@@ -49,10 +55,11 @@ def start_measurement(device_id: str, measurement_type: str) -> Dict[str, Any]:
         "message": f"Started {measurement_type} measurement on {device_id}."
     }
 
-def troubleshoot_step(step_id: str) -> Dict[str, Any]:
+def troubleshoot_step(step_id: str, resolved: bool = False) -> Dict[str, Any]:
     return {
         "status": "success",
         "step_id": step_id,
+        "resolved": resolved,
         "message": f"Troubleshooting step '{step_id}' executed successfully."
     }
 
