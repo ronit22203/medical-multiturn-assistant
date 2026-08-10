@@ -1,0 +1,24 @@
+# configs/safety_rules.yaml
+# Trigger immediate escalation; bypass LLM generation
+red_flag_keywords:
+  - "chest pain"
+  - "shortness of breath"
+  - "can't breathe"
+  - "dizzy"
+  - "fainting"
+  - "lightheaded"
+
+# Regex extraction will pull numbers near these keywords to evaluate against bounds
+vitals_thresholds:
+  spo2:
+    min: 90
+    max: 100
+  systolic_bp:
+    min: 90
+    max: 180
+  diastolic_bp:
+    min: 60
+    max: 110
+  heart_rate:
+    min: 50
+    max: 120

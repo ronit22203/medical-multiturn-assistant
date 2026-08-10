@@ -1,0 +1,17 @@
+# configs/model.yaml
+env: local  # Toggle to 'prod' when running on RunPod
+
+endpoints:
+  local:
+    backend: ollama
+    api_base: "http://localhost:11434/v1"
+    model_id: "qwen2.5:7b-instruct"
+    max_tokens: 512
+    temperature: 0.1
+
+  prod:
+    backend: vllm
+    api_base: "http://localhost:8000/v1"
+    model_id: "Qwen/Qwen2.5-7B-Instruct"
+    max_tokens: 512
+    temperature: 0.1

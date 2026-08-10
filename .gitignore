@@ -1,0 +1,137 @@
+# Operating systems
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python build and packaging artifacts
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables, credentials, and local overrides
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+*.pem
+*.key
+*.crt
+credentials.json
+secrets.json
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
+test-results/
+.tox/
+.nox/
+.hypothesis/
+
+# Linters, type checkers, and language servers
+.mypy_cache/
+.pyre/
+.pytype/
+.pyright/
+.ruff_cache/
+.pylint.d/
+dmypy.json
+dmypy.json.*
+
+# Jupyter
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Logs, process files, and local runtime state
+*.log
+*.log.*
+*.pid
+*.pid.lock
+*.seed
+logs/
+.cache/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+*.bak
+
+# Generated datasets and evaluation outputs
+data/raw/
+data/processed/
+data/generated/
+data/synthetic/
+data/eval/
+data/metrics/
+outputs/
+artifacts/
+reports/
+
+# Models, checkpoints, and training runs
+models/
+weights/
+checkpoints/
+runs/
+wandb/
+mlruns/
+lightning_logs/
+tensorboard/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.gguf
+
+# Documentation builds
+site/
+docs/_build/

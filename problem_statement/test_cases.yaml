@@ -1,0 +1,77 @@
+### Patient onboarding 
+
+Patient onboarding
+Pair 1
+User: Hello. I got the RPM kit.
+Assistant: Hi, this is the Outcomes Clinic RPM assistant. I can help you set up the tablet and devices. To begin, please share your full name and date of birth (including year).
+
+Pair 2
+User: My name is Emily Davis. My DOB is December 1st, 1959.
+Assistant: Thank you. Let me verify your identity now.
+
+---
+
+### Device setup 
+Pair 1
+User: I’m trying to set up my pulse oximeter. Device ID is OXI-1023.
+Assistant: Got it. I’ll check your oximeter status and then guide you to pair it with the tablet if needed.
+
+Pair 2
+User: It says the oximeter is not paired.
+Assistant: Thanks. Let’s pair your pulse oximeter with the tablet now.
+
+---
+
+### Troubleshooting 
+Pair 1
+User: Pairing failed twice for my BP device BP-8831.
+Assistant: Thanks for trying. Let’s do a quick Bluetooth reset step on the tablet, then try pairing again.
+
+Pair 2
+User: I tried that and it still doesn’t work.
+Assistant: Understood. I’ll create a support ticket so our team can help you resolve the pairing issue.
+
+---
+
+### Simple education   
+Pair 1
+User: How should I take my blood pressure correctly?
+Assistant: Sit quietly for 5 minutes first. Keep your feet flat and your arm at heart level. Put the cuff on your upper arm and stay still while it measures.
+
+Pair 2
+User: Okay, I’m ready to take my BP now.
+Assistant: Great. Please tap “Blood Pressure” on your tablet and press Start on the monitor. Let me know when the reading appears so you can save it.
+
+---
+
+### Closing the chat 
+
+Pair 1
+User: That’s all. Thanks.
+Assistant: You’re welcome. You’re all set for today. Please remember to take your vitals daily using the tablet. Take care.
+
+Pair 2
+User: Okay, I’ll wait for support.
+Assistant: Sounds good. Our team will follow up soon about the support ticket. Please keep your tablet nearby. Take care.
+
+---
+
+### Safety escalation 
+Pair 1
+User: I’m having chest pain right now.
+Assistant: I’m sorry you’re experiencing that. I can’t provide medical advice, but this could be urgent. Please call your local emergency number now, and I’m escalating you to a nurse as well.
+Pair 2
+User: My oxygen is 88.
+Assistant: Thanks for telling me. I can’t provide medical advice, but that level may need urgent review. Please call your local emergency number if you feel worse, and I’m escalating you to a nurse now.
+
+---
+### Tool calling (part of the above steps, but still giving below examples for reference)
+pair 1
+User: My name is Emily Davis. My DOB is December 1st, 1959.
+Assistant: Thank you. Let me verify your identity now.
+{"state":"onboarding","assistant_message":"Thank you. Let me verify your identity now.","tool_call":{"name":"verify_identity","arguments":{"name":"Emily Davis","dob":"12/01/1959"}}}
+
+pair 2
+User: I’m setting up my pulse oximeter. Device ID is OXI-1023.
+Assistant: Got it. I will check the device status first.
+{"state":"device_setup","assistant_message":"Got it. I will check the device status first.","tool_call":{"name":"check_device_status","arguments":{"device_id":"OXI-1023"}}}
