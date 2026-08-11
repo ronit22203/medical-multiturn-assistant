@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from src.engine.interceptor import SafetyInterceptor
 from src.engine.state_machine import RPMStateMachine
+from src.paths import project_path
 from src.tools.registry import ToolRegistry
 
 
@@ -96,7 +97,10 @@ class RPMAgent:
     def __init__(self, env: str = "local") -> None:
         """Initialize the configured backend and its telemetry metadata."""
         try:
-            with open("configs/model.yaml", "r", encoding="utf-8") as config_file:
+            with project_path("configs/model.yaml").open(
+                "r",
+                encoding="utf-8",
+            ) as config_file:
                 config = yaml.safe_load(config_file)
             endpoint = config["endpoints"][env]
         except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:

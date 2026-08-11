@@ -1,8 +1,11 @@
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
+
+from src.paths import project_path
 
 
 SPO2_PATTERN = re.compile(
@@ -33,9 +36,12 @@ class InterceptResult:
 
 
 class SafetyInterceptor:
-    def __init__(self, config_path: str = "configs/safety_rules.yaml") -> None:
+    def __init__(
+        self,
+        config_path: str | Path = "configs/safety_rules.yaml",
+    ) -> None:
         """Load deterministic safety rules and initialize turn-local context."""
-        with open(config_path, "r", encoding="utf-8") as config_file:
+        with project_path(config_path).open("r", encoding="utf-8") as config_file:
             config: dict[str, Any] = yaml.safe_load(config_file)
 
         self.red_flag_keywords: list[str] = config.get("red_flag_keywords", [])

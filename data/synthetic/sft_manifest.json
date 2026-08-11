@@ -1,0 +1,73 @@
+{
+  "chat_template": "Qwen/Qwen2.5-7B-Instruct",
+  "files": {
+    "combined": "data/synthetic/sft_dataset.jsonl",
+    "test": "data/synthetic/sft_test.jsonl",
+    "train": "data/synthetic/sft_train.jsonl",
+    "validation": "data/synthetic/sft_validation.jsonl"
+  },
+  "format": "qwen_native_tool_calls_v1",
+  "scenarios": {
+    "closing": 27,
+    "device_pair": 27,
+    "device_status": 28,
+    "education": 27,
+    "measurement": 27,
+    "onboarding_complete": 28,
+    "onboarding_partial": 28,
+    "safe_vital": 27,
+    "safety": 27,
+    "setup_issue": 27,
+    "troubleshooting": 27
+  },
+  "seed": 42,
+  "split_scenarios": {
+    "test": {
+      "closing": 3,
+      "device_pair": 2,
+      "device_status": 2,
+      "education": 3,
+      "measurement": 3,
+      "onboarding_complete": 3,
+      "onboarding_partial": 3,
+      "safe_vital": 3,
+      "safety": 3,
+      "setup_issue": 2,
+      "troubleshooting": 3
+    },
+    "train": {
+      "closing": 21,
+      "device_pair": 23,
+      "device_status": 24,
+      "education": 21,
+      "measurement": 21,
+      "onboarding_complete": 22,
+      "onboarding_partial": 23,
+      "safe_vital": 21,
+      "safety": 21,
+      "setup_issue": 22,
+      "troubleshooting": 21
+    },
+    "validation": {
+      "closing": 3,
+      "device_pair": 2,
+      "device_status": 2,
+      "education": 3,
+      "measurement": 3,
+      "onboarding_complete": 3,
+      "onboarding_partial": 2,
+      "safe_vital": 3,
+      "safety": 3,
+      "setup_issue": 3,
+      "troubleshooting": 3
+    }
+  },
+  "splits": {
+    "test": 30,
+    "train": 240,
+    "validation": 30
+  },
+  "structured_arguments_encoding": "json_string",
+  "total_records": 300,
+  "training_field": "text"
+}

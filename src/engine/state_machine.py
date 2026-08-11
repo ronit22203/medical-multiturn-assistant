@@ -1,12 +1,18 @@
+from pathlib import Path
 from typing import Any
 
 import yaml
 
+from src.paths import project_path
+
 
 class RPMStateMachine:
-    def __init__(self, config_path: str = "configs/state_graph.yaml") -> None:
+    def __init__(
+        self,
+        config_path: str | Path = "configs/state_graph.yaml",
+    ) -> None:
         """Load the workflow graph and initialize deterministic session state."""
-        with open(config_path, "r", encoding="utf-8") as config_file:
+        with project_path(config_path).open("r", encoding="utf-8") as config_file:
             config: dict[str, Any] = yaml.safe_load(config_file)
 
         self.states: dict[str, dict[str, Any]] = config.get("states", {})

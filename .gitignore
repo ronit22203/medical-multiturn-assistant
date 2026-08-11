@@ -115,6 +115,10 @@ data/metrics/
 !data/synthetic/
 data/synthetic/*
 !data/synthetic/sft_dataset.jsonl
+!data/synthetic/sft_train.jsonl
+!data/synthetic/sft_validation.jsonl
+!data/synthetic/sft_test.jsonl
+!data/synthetic/sft_manifest.json
 outputs/
 artifacts/
 reports/
