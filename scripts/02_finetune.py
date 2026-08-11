@@ -13,14 +13,14 @@ INSTALL (CUDA instance only — excluded from the local uv environment)
   pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
   pip install --no-deps trl peft accelerate bitsandbytes
 """
-
+from unsloth import FastLanguageModel
+import torch
+from transformers import TrainingArguments
 import os
 from pathlib import Path
 
 from datasets import load_dataset
-from transformers import TrainingArguments
 from trl import SFTTrainer
-from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 
 # ---------------------------------------------------------------------------
