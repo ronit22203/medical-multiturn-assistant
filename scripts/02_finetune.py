@@ -13,15 +13,12 @@ INSTALL (CUDA instance only — excluded from the local uv environment)
   pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
   pip install --no-deps trl peft accelerate bitsandbytes
 """
+# unsloth MUST be imported first — it patches torch internals at import time.
 from unsloth import FastLanguageModel
-import torch
-from transformers import TrainingArguments
-import os
-from pathlib import Path
-
+from unsloth.chat_templates import get_chat_template
 from datasets import load_dataset
 from trl import SFTTrainer
-from unsloth.chat_templates import get_chat_template
+from transformers import TrainingArguments
 
 # ---------------------------------------------------------------------------
 # 1. Configuration
@@ -59,12 +56,6 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 tokenizer = get_chat_template(
     tokenizer,
     chat_template="chatml",
-    mapping={
-        "role": "role",
-        "content": "content",
-        "user": "user",
-        "assistant": "assistant",
-    },
 )
 print(f"  Model loaded: {MODEL_NAME}")
 print(f"  bfloat16 supported: {FastLanguageModel.is_bfloat16_supported()}")
