@@ -61,6 +61,63 @@ make run
 
 ---
 
+## Fine-Tuning (LoRA SFT on RunPod)
+
+`scripts/02_finetune.py` trains a LoRA adapter on `Qwen2.5-7B-Instruct` using the 300-row synthetic corpus and exports two production artifacts from a single run.
+
+### Prerequisites
+
+Requires a CUDA GPU instance (RunPod A100/H100). Install CUDA dependencies before running:
+
+```bash
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+pip install --no-deps trl peft accelerate bitsandbytes
+```
+
+### Run the Forge
+
+```bash
+python scripts/02_finetune.py
+```
+
+### Outputs
+
+| Path | Purpose |
+|------|---------|
+| `outputs/production_vllm_workspace/` | Merged 16-bit HF model → cloud vLLM serving |
+| `outputs/local_gguf_workspace/*.gguf` | `q4_k_m` GGUF binary → local Ollama on Apple M4 |
+
+### Deploy to Ollama (M4 Mac)
+
+SCP the GGUF back from RunPod:
+
+```bash
+scp -r runpod:~/medical-multiturn-assistant/outputs/local_gguf_workspace ./outputs/
+```
+
+Create a `Modelfile` in the project root:
+
+```
+FROM ./outputs/local_gguf_workspace/model-q4_k_m.gguf
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+```
+
+> **Required:** Qwen2.5 uses the ChatML template. The two `PARAMETER stop` directives must be
+> declared explicitly — Ollama's runtime uses them to terminate generation. Without them the
+> model will hallucinate formatting tokens indefinitely.
+
+Build and run:
+
+```bash
+ollama create rpm-agent -f Modelfile
+ollama run rpm-agent
+```
+
+Update `configs/model.yaml` → `model_id: "rpm-agent"` to switch inference to the fine-tuned weights.
+
+---
+
 ## Evaluation & Metrics
 
 The system is evaluated against a synthetic multi-turn dataset covering edge cases, out-of-order intents, and sudden red flags.
