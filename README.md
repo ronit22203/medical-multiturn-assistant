@@ -67,9 +67,15 @@ make run
 
 ### Prerequisites
 
-Requires a CUDA GPU instance (RunPod A100/H100). Install CUDA dependencies before running:
+Requires a CUDA GPU instance (RunPod RTX 4090 / A100 / H100).
+
+> **Template note:** The `runpod/pytorch:2.4.0` template ships with PyTorch 2.4.1, which is incompatible with `unsloth_zoo ≥ 2026.8` (requires `torch ≥ 2.11`, uses `torch.int1`). Upgrade torch first.
 
 ```bash
+# Step 1: Upgrade PyTorch to 2.5+ (CUDA 12.4 wheel — matches the RunPod image)
+pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --upgrade
+
+# Step 2: Install Unsloth and training stack
 pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 pip install --no-deps trl peft accelerate bitsandbytes
 ```

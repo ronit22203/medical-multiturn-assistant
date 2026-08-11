@@ -63,13 +63,38 @@ def pair_device(device_id: str) -> Dict[str, Any]:
         "message": f"Device '{device_id}' successfully paired with tablet."
     }
 
-def start_measurement(device_id: str, measurement_type: str) -> Dict[str, Any]:
+import random
+
+SIMULATED_READINGS: dict[str, dict] = {
+    "spo2": lambda: {
+        "spo2_percent": round(random.uniform(95.0, 99.5), 1),
+        "pulse_bpm": random.randint(60, 95),
+    },
+    "bp": lambda: {
+        "systolic_mmhg": random.randint(110, 135),
+        "diastolic_mmhg": random.randint(70, 88),
+        "pulse_bpm": random.randint(60, 95),
+    },
+    "weight": lambda: {
+        "weight_kg": round(random.uniform(55.0, 110.0), 1),
+        "weight_lbs": round(random.uniform(121.0, 242.0), 1),
+    },
+    "temperature": lambda: {
+        "temp_celsius": round(random.uniform(36.1, 37.4), 1),
+        "temp_fahrenheit": round(random.uniform(97.0, 99.3), 1),
+    },
+}
+
+
+def start_measurement(device_id: str, measurement_type: str) -> dict:
+    reading = SIMULATED_READINGS.get(measurement_type, lambda: {})()
     return {
         "status": "success",
         "device_id": device_id,
         "measurement_type": measurement_type,
-        "reading_status": "in_progress",
-        "message": f"Started {measurement_type} measurement on {device_id}."
+        "reading_status": "complete",
+        "readings": reading,
+        "message": f"Measurement complete for {measurement_type} on {device_id}. Values: {reading}",
     }
 
 def troubleshoot_step(step_id: str, resolved: bool = False) -> Dict[str, Any]:
