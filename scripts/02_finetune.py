@@ -16,6 +16,7 @@ INSTALL (CUDA instance only — excluded from the local uv environment)
 # unsloth MUST be imported first — it patches torch internals at import time.
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
+import torch
 from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
@@ -58,7 +59,7 @@ tokenizer = get_chat_template(
     chat_template="chatml",
 )
 print(f"  Model loaded: {MODEL_NAME}")
-print(f"  bfloat16 supported: {FastLanguageModel.is_bfloat16_supported()}")
+print(f"  bfloat16 supported: {torch.cuda.is_bf16_supported()}")
 
 # ---------------------------------------------------------------------------
 # 3. LoRA Adapter Configuration
@@ -115,8 +116,8 @@ trainer = SFTTrainer(
         warmup_steps=10,
         max_steps=60,
         learning_rate=2e-4,
-        fp16=not FastLanguageModel.is_bfloat16_supported(),
-        bf16=FastLanguageModel.is_bfloat16_supported(),
+        fp16=not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_bf16_supported(),
         logging_steps=1,
         optim="adamw_8bit",
         weight_decay=0.01,
