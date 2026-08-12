@@ -1,0 +1,10 @@
+# RunPod vLLM serving stack — install AFTER the CUDA torch wheel in setup_prod.sh
+# fastapi 0.115+ dropped Router.on_startup, which vLLM 0.6.6.post1 still passes.
+vllm==0.6.6.post1
+fastapi>=0.110.0,<0.113.0
+starlette>=0.36.0,<0.38.0
+uvicorn>=0.30.0,<0.33.0
+pydantic>=2.7.0,<3
+huggingface_hub>=0.26.0,<0.27.0
+xgrammar>=0.1.11,<0.1.15
+ninja

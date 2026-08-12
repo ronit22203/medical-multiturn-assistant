@@ -1,5 +1,7 @@
-import streamlit as st
+import json
 from datetime import datetime
+
+import streamlit as st
 
 from src.agent.inference import RPMAgent, InferenceMetrics
 from src.engine.state_machine import RPMStateMachine
@@ -14,6 +16,7 @@ st.markdown("""
     div[data-testid="column"]:first-of-type { border-right: 1px solid #334155; padding-right: 1.5rem; }
     div[data-testid="column"]:last-of-type { padding-left: 1.5rem; }
     .status-badge-safe { background-color: #064E3B; color: #34D399; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; }
+    .status-badge-alert { background-color: #7F1D1D; color: #FCA5A5; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; }
     .chat-wrap { height: 520px; overflow-y: auto; padding: 0.5rem 0; }
     .msg-row { display: flex; margin-bottom: 0.75rem; }
     .msg-row.user  { justify-content: flex-end; }
@@ -37,6 +40,7 @@ if "agent" not in st.session_state:
         {"role": "assistant", "content": "System initialized. Awaiting patient interaction."}
     ]
     st.session_state.last_metrics: InferenceMetrics | None = None
+    st.session_state.last_metrics_note: str | None = None
     st.session_state.dfa_state: str = st.session_state.dfa.current_state
     # Keyed by measurement_type, value is the readings dict
     st.session_state.device_readings: dict = {}
@@ -46,7 +50,11 @@ chat_pane, telemetry_pane = st.columns([1.35, 0.85], gap="medium")
 
 with chat_pane:
     st.subheader("Multi-Turn RPM Clinical Assistant")
-    st.caption(f"Active endpoint: {st.session_state.agent.backend.upper()} / {st.session_state.agent.model_id}")
+    st.caption(
+        f"Active endpoint: {st.session_state.agent.env} / "
+        f"{st.session_state.agent.backend.upper()} / "
+        f"{st.session_state.agent.model_id}"
+    )
 
     # Plain HTML chat — no st.chat_message(), no icons, no avatars
     rows = ""
@@ -79,16 +87,26 @@ with chat_pane:
             )
         st.session_state.messages.append({"role": "assistant", "content": result.message})
         st.session_state.last_metrics = result.metrics
+        st.session_state.last_metrics_note = result.metrics_note
         st.session_state.dfa_state = st.session_state.dfa.current_state
 
-        # Capture device readings from start_measurement tool calls
         tc = result.response.tool_call
         if tc and tc.name == "start_measurement":
             mtype = tc.arguments.get("measurement_type", "unknown")
-            # Re-execute to get readings (registry already ran it; pull from tool result via registry)
-            tool_result = st.session_state.registry.execute_tool("start_measurement", tc.arguments)
-            if "readings" in tool_result:
-                st.session_state.device_readings[mtype] = tool_result["readings"]
+            readings = None
+            for message in reversed(st.session_state.agent.messages):
+                if message.get("role") != "tool":
+                    continue
+                try:
+                    payload = json.loads(message.get("content") or "")
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and "readings" in payload:
+                    readings = payload["readings"]
+                    mtype = payload.get("measurement_type", mtype)
+                    break
+            if isinstance(readings, dict):
+                st.session_state.device_readings[mtype] = readings
 
         st.rerun()
 
@@ -128,7 +146,11 @@ with telemetry_pane:
     with st.expander("Safety Interceptor & DFA State", expanded=True):
         st.markdown("##### DFA Current State")
         st.code(st.session_state.dfa_state, language=None)
-        st.markdown('Status: <span class="status-badge-safe">NOMINAL</span>', unsafe_allow_html=True)
+        if st.session_state.dfa_state == "escalated":
+            badge = '<span class="status-badge-alert">ESCALATED</span>'
+        else:
+            badge = '<span class="status-badge-safe">NOMINAL</span>'
+        st.markdown(f"Status: {badge}", unsafe_allow_html=True)
         st.text("Last Check: " + datetime.now().strftime("%H:%M:%S"))
 
     with st.expander("Language Model Telemetry", expanded=True):
@@ -142,3 +164,5 @@ with telemetry_pane:
             st.metric("Completion Tokens", str(m.output_tokens) if m and m.output_tokens else "—")
         if m:
             st.caption(f"Total: {m.total_latency_ms:.0f} ms | Requests: {m.llm_requests}")
+        elif st.session_state.get("last_metrics_note"):
+            st.caption(st.session_state.last_metrics_note)

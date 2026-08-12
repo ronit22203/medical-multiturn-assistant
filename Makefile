@@ -87,7 +87,9 @@ serve: ## [RunPod] Launch vLLM server on port 8000 (requires setup-prod + traine
 		--model $(VLLM_MODEL) \
 		--dtype bfloat16 \
 		--port 8000 \
-		--host 0.0.0.0
+		--host 0.0.0.0 \
+		--enable-auto-tool-choice \
+		--tool-call-parser hermes
 
 # =============================================================================
 # UTILITY

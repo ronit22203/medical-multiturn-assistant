@@ -52,9 +52,9 @@ def main() -> None:
     interceptor = SafetyInterceptor()
     registry = ToolRegistry()
 
-    # Instantiate the NLU Engine (routing to Ollama via model.yaml)
+    # Instantiate the NLU Engine (routing via configs/model.yaml env)
     try:
-        agent = RPMAgent(env="local")
+        agent = RPMAgent()
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
         print(
             "Failed to initialize Agent. Check model.yaml and Ollama. "
