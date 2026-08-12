@@ -16,14 +16,16 @@ from src.paths import project_path
 from src.tools.registry import ToolRegistry
 
 
+# ---------------------------------------------------------
+# FIX 1: Concisely deflated prompt to stop attention collapse
+# ---------------------------------------------------------
 GLOBAL_SAFETY_INVARIANT = (
-    "GLOBAL SAFETY INVARIANT: Do not provide medical advice, diagnose, or "
-    "characterize any vital sign as normal, safe, good, bad, high, or low. "
-    "Never reassure a user about a vital sign. Vital-sign interpretation and "
-    "escalation are exclusively handled by deterministic safety controls. "
-    "If a vital sign reaches you, acknowledge receipt without interpreting it "
-    "and continue only with the current workflow."
+    "SAFETY RULES: You are a clinical data-collection interface. "
+    "You are strictly forbidden from diagnosing, interpreting, or judging vital signs. "
+    "If you receive device readings, acknowledge receipt neutrally. "
+    "Never use subjective words like 'normal', 'safe', 'high', or 'bad'."
 )
+
 DEVICE_ISSUE_PATTERN = re.compile(
     r"\b(?:(?:cannot|can't|won't|not|isn't|stopped)\s+"
     r"(?:pair(?:ing)?|connect(?:ing)?|work(?:ing)?)|"
@@ -358,10 +360,40 @@ class RPMAgent:
                 "stream": True,
                 "stream_options": {"include_usage": True},
             }
+
+            # ---------------------------------------------------------
+            # FIX 2: Dynamic tool-forcing logic for state transitions
+            # ---------------------------------------------------------
             if tool_schemas:
                 api_kwargs["tools"] = tool_schemas
-                api_kwargs["tool_choice"] = "auto"
                 api_kwargs["parallel_tool_calls"] = False
+
+                # Map out the names of tools that are currently active in this state
+                active_tool_names = [t.get("function", {}).get("name") for t in tool_schemas]
+
+                # We define a priority list of tools that MUST be executed if they are present.
+                # NOTE: If your registry named the onboarding tool something different (e.g., 'submit_patient'), add it to this list.
+                target_tools = [
+                    "verify_identity",
+                    "verify_patient",
+                    "register_patient",
+                    "pair_device",
+                    "start_measurement"
+                ]
+
+                forced_tool = None
+                for target in target_tools:
+                    if target in active_tool_names:
+                        forced_tool = target
+                        break
+
+                if forced_tool:
+                    api_kwargs["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": forced_tool}
+                    }
+                else:
+                    api_kwargs["tool_choice"] = "auto"
 
             request_first_output_at: float | None = None
             content_parts: list[str] = []
