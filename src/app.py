@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 
 import streamlit as st
@@ -7,6 +8,94 @@ from src.agent.inference import RPMAgent, InferenceMetrics
 from src.engine.state_machine import RPMStateMachine
 from src.engine.interceptor import SafetyInterceptor
 from src.tools.registry import ToolRegistry
+
+MEASUREMENT_TYPE_ALIASES = {
+    "spo2": "spo2",
+    "sp_o2": "spo2",
+    "oxygen": "spo2",
+    "oximeter": "spo2",
+    "pulse_ox": "spo2",
+    "pulse_oximeter": "spo2",
+    "bp": "bp",
+    "blood_pressure": "bp",
+    "weight": "weight",
+    "scale": "weight",
+    "temperature": "temperature",
+    "temp": "temperature",
+}
+CHAT_SPO2_PATTERN = re.compile(
+    r"SpO2:\s*([\d.]+)\s*%?.{0,120}?Heart Rate:\s*(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+CHAT_BP_PATTERN = re.compile(
+    r"(?:BP|blood pressure)[^\d]{0,20}(\d{2,3})\s*/\s*(\d{2,3})",
+    re.IGNORECASE,
+)
+
+
+def normalize_measurement_type(mtype: str, readings: dict) -> str:
+    """Map tool aliases onto the telemetry card keys."""
+    key = re.sub(r"[\s-]+", "_", str(mtype or "unknown").strip().lower())
+    if key in MEASUREMENT_TYPE_ALIASES:
+        return MEASUREMENT_TYPE_ALIASES[key]
+    if "spo2_percent" in readings:
+        return "spo2"
+    if "systolic_mmhg" in readings:
+        return "bp"
+    if "weight_kg" in readings:
+        return "weight"
+    if "temp_celsius" in readings:
+        return "temperature"
+    return key or "unknown"
+
+
+def harvest_device_readings(agent_messages: list) -> dict:
+    """Copy every start_measurement tool payload into persistent UI state."""
+    found: dict = {}
+    for message in agent_messages:
+        if message.get("role") != "tool":
+            continue
+        try:
+            payload = json.loads(message.get("content") or "")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        readings = payload.get("readings")
+        if not isinstance(readings, dict) or not readings:
+            continue
+        mtype = normalize_measurement_type(
+            payload.get("measurement_type", ""),
+            readings,
+        )
+        found[mtype] = readings
+    return found
+
+
+def harvest_readings_from_chat(messages: list) -> dict:
+    """Backfill the pane when the model quoted a saved reading in prose."""
+    found: dict = {}
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content") or ""
+        spo2_match = CHAT_SPO2_PATTERN.search(content)
+        if spo2_match:
+            found["spo2"] = {
+                "spo2_percent": float(spo2_match.group(1)),
+                "pulse_bpm": int(spo2_match.group(2)),
+            }
+        bp_match = CHAT_BP_PATTERN.search(content)
+        if bp_match:
+            found.setdefault(
+                "bp",
+                {
+                    "systolic_mmhg": int(bp_match.group(1)),
+                    "diastolic_mmhg": int(bp_match.group(2)),
+                },
+            )
+    return found
+
 
 st.set_page_config(page_title="RPM Control Center", layout="wide", initial_sidebar_state="collapsed")
 
@@ -44,6 +133,14 @@ if "agent" not in st.session_state:
     st.session_state.dfa_state: str = st.session_state.dfa.current_state
     # Keyed by measurement_type, value is the readings dict
     st.session_state.device_readings: dict = {}
+
+harvested = harvest_device_readings(st.session_state.agent.messages)
+if harvested:
+    st.session_state.device_readings.update(harvested)
+elif not st.session_state.device_readings:
+    st.session_state.device_readings.update(
+        harvest_readings_from_chat(st.session_state.messages)
+    )
 
 # ---------------------------------------------------------------------------
 chat_pane, telemetry_pane = st.columns([1.35, 0.85], gap="medium")
@@ -89,24 +186,13 @@ with chat_pane:
         st.session_state.last_metrics = result.metrics
         st.session_state.last_metrics_note = result.metrics_note
         st.session_state.dfa_state = st.session_state.dfa.current_state
-
-        tc = result.response.tool_call
-        if tc and tc.name == "start_measurement":
-            mtype = tc.arguments.get("measurement_type", "unknown")
-            readings = None
-            for message in reversed(st.session_state.agent.messages):
-                if message.get("role") != "tool":
-                    continue
-                try:
-                    payload = json.loads(message.get("content") or "")
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(payload, dict) and "readings" in payload:
-                    readings = payload["readings"]
-                    mtype = payload.get("measurement_type", mtype)
-                    break
-            if isinstance(readings, dict):
-                st.session_state.device_readings[mtype] = readings
+        st.session_state.device_readings.update(
+            harvest_device_readings(st.session_state.agent.messages)
+        )
+        if not st.session_state.device_readings:
+            st.session_state.device_readings.update(
+                harvest_readings_from_chat(st.session_state.messages)
+            )
 
         st.rerun()
 
@@ -142,6 +228,10 @@ with telemetry_pane:
                 c1, c2 = st.columns(2)
                 c1.metric("Temperature", f"{r.get('temp_celsius', '—')} °C")
                 c2.metric("", f"{r.get('temp_fahrenheit', '—')} °F")
+            known = {"spo2", "bp", "weight", "temperature"}
+            extras = {key: value for key, value in readings.items() if key not in known}
+            if extras:
+                st.json(extras)
 
     with st.expander("Safety Interceptor & DFA State", expanded=True):
         st.markdown("##### DFA Current State")
