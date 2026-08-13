@@ -96,6 +96,11 @@ PAIR_OR_SETUP_INTENT = re.compile(
     r"\b(?:pair(?:ing)?|set\s*up|setup|ready|yes)\b",
     re.IGNORECASE,
 )
+MEASURE_INTENT = re.compile(
+    r"\b(?:ready|reading|measure|measurement|vitals|spo2|oxygen|oximeter|"
+    r"blood\s*pressure|\bbp\b|take)\b",
+    re.IGNORECASE,
+)
 STATE_FALLBACK_MESSAGES = {
     "1_onboarding": (
         "Please provide your first name, last name, and date of birth."
@@ -209,6 +214,29 @@ def extract_identity_from_history(
 def user_turn_has_identity_fields(user_text: str) -> bool:
     """Return True when the user turn appears to include a name and date of birth."""
     return extract_identity_fields(user_text) is not None
+
+
+def infer_measurement_type(text: str, device_id: str | None = None) -> str | None:
+    """Infer spo2/bp/weight/temperature from user text or a device ID prefix."""
+    lowered = text.lower()
+    if re.search(r"\b(?:spo2|sp\s*o2|oxygen|oximeter|pulse\s*ox)\b", lowered):
+        return "spo2"
+    if re.search(r"\b(?:blood\s*pressure|bp)\b", lowered):
+        return "bp"
+    if re.search(r"\b(?:weight|scale)\b", lowered):
+        return "weight"
+    if re.search(r"\b(?:temp(?:erature)?|thermometer)\b", lowered):
+        return "temperature"
+    prefix = (device_id or "").split("-", 1)[0].split("_", 1)[0].upper()
+    if prefix in {"PO", "OXI", "OX", "PULSE"}:
+        return "spo2"
+    if prefix in {"BP"}:
+        return "bp"
+    if prefix in {"WT", "SCALE"}:
+        return "weight"
+    if prefix in {"TEMP", "TH"}:
+        return "temperature"
+    return None
 
 
 def extract_device_id(text: str) -> str | None:
@@ -766,6 +794,50 @@ class RPMAgent:
                         "Tell the user the current next step. "
                         "Do not repeat safety rules."
                     )
+
+        if dfa.current_state == "4_education" and controller_context is None:
+            device_id = extract_device_id_from_history(self.messages, user_input)
+            if device_id is None and dfa.paired_devices:
+                device_id = next(iter(sorted(dfa.paired_devices)))
+            measurement_type = infer_measurement_type(user_input, device_id)
+            should_measure = (
+                device_id is not None
+                and measurement_type is not None
+                and MEASURE_INTENT.search(user_input) is not None
+            )
+            if should_measure:
+                measure_args = {
+                    "device_id": device_id,
+                    "measurement_type": measurement_type,
+                }
+                measure_result = self._execute_workflow_tool(
+                    dfa,
+                    registry,
+                    "start_measurement",
+                    measure_args,
+                    "forced-start_measurement",
+                )
+                if measure_result.get("status") != "success":
+                    return self._turn_result(
+                        state=dfa.current_state,
+                        message=(
+                            "[System Error] Unable to start measurement: "
+                            f"{measure_result.get('message', 'unknown tool error')}"
+                        ),
+                        metrics_note=(
+                            "LLM bypassed because deterministic routing failed"
+                        ),
+                    )
+                response_tool_call = ResponseToolCall(
+                    name="start_measurement",
+                    arguments=measure_args,
+                )
+                controller_context = (
+                    "DETERMINISTIC CONTROLLER EVENT: start_measurement already "
+                    f"ran for {device_id}. Readings: {measure_result.get('readings')}. "
+                    "Do not call a tool. Acknowledge receipt without interpreting "
+                    "the values. Do not repeat safety rules."
+                )
 
         turn_started_at = perf_counter()
         first_turn_output_at: float | None = None

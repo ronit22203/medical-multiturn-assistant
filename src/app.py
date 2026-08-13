@@ -24,8 +24,12 @@ MEASUREMENT_TYPE_ALIASES = {
     "temp": "temperature",
 }
 CHAT_SPO2_PATTERN = re.compile(
-    r"SpO2:\s*([\d.]+)\s*%?.{0,120}?Heart Rate:\s*(\d+)",
-    re.IGNORECASE | re.DOTALL,
+    r"\b(?:spo2|sp\s*o2|oxygen)\b[^\d]{0,24}(\d{2,3}(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+CHAT_HR_PATTERN = re.compile(
+    r"\b(?:heart\s*rate|pulse|hr)\b[^\d]{0,24}(\d{2,3})",
+    re.IGNORECASE,
 )
 CHAT_BP_PATTERN = re.compile(
     r"(?:BP|blood pressure)[^\d]{0,20}(\d{2,3})\s*/\s*(\d{2,3})",
@@ -75,26 +79,42 @@ def harvest_device_readings(agent_messages: list) -> dict:
 def harvest_readings_from_chat(messages: list) -> dict:
     """Backfill the pane when the model quoted a saved reading in prose."""
     found: dict = {}
+    spo2_value = None
+    hr_value = None
     for message in messages:
         if message.get("role") != "assistant":
             continue
-        content = message.get("content") or ""
+        content = str(message.get("content") or "")
         spo2_match = CHAT_SPO2_PATTERN.search(content)
         if spo2_match:
-            found["spo2"] = {
-                "spo2_percent": float(spo2_match.group(1)),
-                "pulse_bpm": int(spo2_match.group(2)),
-            }
+            spo2_value = float(spo2_match.group(1))
+        hr_match = CHAT_HR_PATTERN.search(content)
+        if hr_match:
+            hr_value = int(hr_match.group(1))
         bp_match = CHAT_BP_PATTERN.search(content)
         if bp_match:
-            found.setdefault(
-                "bp",
-                {
-                    "systolic_mmhg": int(bp_match.group(1)),
-                    "diastolic_mmhg": int(bp_match.group(2)),
-                },
-            )
+            found["bp"] = {
+                "systolic_mmhg": int(bp_match.group(1)),
+                "diastolic_mmhg": int(bp_match.group(2)),
+            }
+    if spo2_value is not None:
+        found["spo2"] = {
+            "spo2_percent": spo2_value,
+            "pulse_bpm": hr_value,
+        }
     return found
+
+
+def collect_ui_readings(agent, registry, chat_messages: list) -> dict:
+    """Merge registry log, tool payloads, and chat quotes into one map."""
+    combined: dict = {}
+    for mtype, readings in getattr(registry, "recorded_readings", {}).items():
+        if isinstance(readings, dict) and readings:
+            combined[normalize_measurement_type(mtype, readings)] = readings
+    combined.update(harvest_device_readings(getattr(agent, "messages", [])))
+    for mtype, readings in harvest_readings_from_chat(chat_messages).items():
+        combined.setdefault(mtype, readings)
+    return combined
 
 
 st.set_page_config(page_title="RPM Control Center", layout="wide", initial_sidebar_state="collapsed")
@@ -134,13 +154,11 @@ if "agent" not in st.session_state:
     # Keyed by measurement_type, value is the readings dict
     st.session_state.device_readings: dict = {}
 
-harvested = harvest_device_readings(st.session_state.agent.messages)
-if harvested:
-    st.session_state.device_readings.update(harvested)
-elif not st.session_state.device_readings:
-    st.session_state.device_readings.update(
-        harvest_readings_from_chat(st.session_state.messages)
-    )
+st.session_state.device_readings = collect_ui_readings(
+    st.session_state.agent,
+    st.session_state.registry,
+    st.session_state.messages,
+)
 
 # ---------------------------------------------------------------------------
 chat_pane, telemetry_pane = st.columns([1.35, 0.85], gap="medium")
@@ -186,13 +204,11 @@ with chat_pane:
         st.session_state.last_metrics = result.metrics
         st.session_state.last_metrics_note = result.metrics_note
         st.session_state.dfa_state = st.session_state.dfa.current_state
-        st.session_state.device_readings.update(
-            harvest_device_readings(st.session_state.agent.messages)
+        st.session_state.device_readings = collect_ui_readings(
+            st.session_state.agent,
+            st.session_state.registry,
+            st.session_state.messages,
         )
-        if not st.session_state.device_readings:
-            st.session_state.device_readings.update(
-                harvest_readings_from_chat(st.session_state.messages)
-            )
 
         st.rerun()
 
@@ -200,16 +216,16 @@ with telemetry_pane:
     st.subheader("Telemetry")
 
     with st.expander("Device Readings", expanded=True):
-        readings = st.session_state.device_readings
+        readings = st.session_state.get("device_readings") or {}
         if not readings:
             st.caption("No measurements recorded yet.")
         else:
-            # SpO2
             if "spo2" in readings:
                 r = readings["spo2"]
                 c1, c2 = st.columns(2)
                 c1.metric("SpO2", f"{r.get('spo2_percent', '—')} %")
-                c2.metric("Pulse (SpO2)", f"{r.get('pulse_bpm', '—')} bpm")
+                pulse = r.get("pulse_bpm")
+                c2.metric("Pulse (SpO2)", f"{pulse} bpm" if pulse is not None else "—")
             # BP
             if "bp" in readings:
                 r = readings["bp"]

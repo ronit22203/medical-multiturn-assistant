@@ -341,6 +341,45 @@ class DeviceSetupControllerTests(unittest.TestCase):
         self.assertEqual(result.response.tool_call.name, "pair_device")
         self.assertNotIn("i cannot call", result.message.lower())
 
+    def test_education_measurement_is_stored_on_registry(self) -> None:
+        from openai import OpenAIError
+        from unittest.mock import MagicMock
+
+        from src.engine.interceptor import SafetyInterceptor
+        from src.engine.state_machine import RPMStateMachine
+        from src.tools.registry import ToolRegistry
+
+        agent = RPMAgent.__new__(RPMAgent)
+        agent.messages = [
+            {
+                "role": "user",
+                "content": "pulse oximeter with ID PO-9821",
+            }
+        ]
+        agent.model_id = "test-model"
+        agent.temperature = 0.0
+        agent.max_tokens = 64
+        agent.memory_bandwidth_gbps = None
+        agent.model_size_bytes = None
+        agent.client = MagicMock()
+        agent.client.chat.completions.create.side_effect = OpenAIError("down")
+
+        dfa = RPMStateMachine()
+        dfa.current_state = "4_education"
+        dfa.paired_devices.add("PO-9821")
+        registry = ToolRegistry()
+        result = agent.process_turn(
+            "I am ready to take my oxygen reading",
+            dfa,
+            registry,
+            SafetyInterceptor(),
+        )
+
+        self.assertEqual(result.response.tool_call.name, "start_measurement")
+        self.assertIn("spo2", registry.recorded_readings)
+        self.assertIn("spo2_percent", registry.recorded_readings["spo2"])
+        self.assertEqual(dfa.current_state, "5_closing")
+
 
 if __name__ == "__main__":
     unittest.main()
