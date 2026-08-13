@@ -8,6 +8,8 @@ The LLM functions as a natural language NLU/NLG (Natural Language Understanding 
 
 Operator docs (runbook, decisions, failure modes): [`docs/README.md`](docs/README.md).
 
+![Streamlit RPM control center in production: vLLM backend, device telemetry, and interceptor escalation to `escalated`](docs/assets/Image.png)
+
 ---
 
 ## System Architecture
