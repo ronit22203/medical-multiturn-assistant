@@ -6,6 +6,8 @@ Healthcare LLM wrappers fundamentally fail when they delegate workflow control t
 
 The LLM functions as a natural language NLU/NLG (Natural Language Understanding / Generation) component only—not the control system.
 
+Operator docs (runbook, decisions, failure modes): [`docs/README.md`](docs/README.md).
+
 ---
 
 ## System Architecture
