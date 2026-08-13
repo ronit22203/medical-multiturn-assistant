@@ -3,9 +3,12 @@ from unittest.mock import patch
 
 from src.agent.inference import (
     RPMAgent,
+    collapse_repeated_tool_name,
     complete_streamed_tool_call,
+    extract_device_id,
     extract_identity_fields,
     extract_identity_from_history,
+    recover_tool_arguments,
     resolve_inference_env,
     sanitize_assistant_message,
     select_forced_tool,
@@ -89,36 +92,23 @@ class ForcedToolSelectionTests(unittest.TestCase):
             "verify_identity",
         )
 
-    def test_device_setup_forces_check_before_pair(self) -> None:
-        self.assertEqual(
+    def test_device_setup_does_not_force_tool_choice(self) -> None:
+        self.assertIsNone(
             select_forced_tool(
                 "2_device_setup",
                 ["check_device_status", "pair_device", "troubleshoot_step"],
-                "pair the pulse oximeter",
+                "I'm ready to pair my devices. I have a pulse oximeter with ID PO-9821",
                 checked_devices=set(),
             ),
-            "check_device_status",
         )
 
-    def test_device_setup_forces_pair_after_status_check(self) -> None:
-        self.assertEqual(
-            select_forced_tool(
-                "2_device_setup",
-                ["check_device_status", "pair_device", "troubleshoot_step"],
-                "pair pulse_oximeter",
-                checked_devices={"pulse_oximeter"},
-            ),
-            "pair_device",
-        )
-
-    def test_education_forces_start_measurement(self) -> None:
-        self.assertEqual(
+    def test_education_does_not_force_tool_choice(self) -> None:
+        self.assertIsNone(
             select_forced_tool(
                 "4_education",
                 ["start_measurement", "troubleshoot_step"],
                 "lets continue",
             ),
-            "start_measurement",
         )
 
     def test_controller_owned_turn_does_not_force(self) -> None:
@@ -160,6 +150,19 @@ class HermesToolCallCompletionTests(unittest.TestCase):
         )
         self.assertEqual(completed["id"], "call_abc")
         self.assertEqual(completed["name"], "verify_identity")
+
+    def test_collapses_repeated_check_device_status_name(self) -> None:
+        completed = complete_streamed_tool_call(
+            {
+                "id": "",
+                "name": "check_device_status" * 20,
+                "arguments": "",
+            },
+            forced_tool=None,
+        )
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed["name"], "check_device_status")
+        self.assertEqual(completed["id"], "forced-check_device_status")
 
 
 class IdentityExtractionTests(unittest.TestCase):
@@ -264,6 +267,79 @@ class DeterministicOnboardingTests(unittest.TestCase):
         )
         self.assertNotIn("second patient", result.message.lower())
         self.assertNotIn("i cannot provide medical advice", result.message.lower())
+
+
+class DeviceSetupControllerTests(unittest.TestCase):
+    def test_extracts_assignment_and_trace_device_ids(self) -> None:
+        self.assertEqual(extract_device_id("Device ID is OXI-1023."), "OXI-1023")
+        self.assertEqual(
+            extract_device_id(
+                "I'm ready to pair my devices. I have a pulse oximeter with ID PO-9821"
+            ),
+            "PO-9821",
+        )
+
+    def test_collapses_name_repetition_loop(self) -> None:
+        self.assertEqual(
+            collapse_repeated_tool_name("check_device_status" * 8),
+            "check_device_status",
+        )
+
+    def test_recovers_device_id_when_arguments_are_empty(self) -> None:
+        recovered = recover_tool_arguments(
+            "check_device_status",
+            "",
+            [
+                {
+                    "role": "user",
+                    "content": "pulse oximeter with ID PO-9821",
+                }
+            ],
+            "Yes, check that device status.",
+        )
+        self.assertEqual(recovered, {"device_id": "PO-9821"})
+
+    def test_replaces_tool_permission_prompt(self) -> None:
+        message = sanitize_assistant_message(
+            'I cannot call check_device_status. Please try again with "Yes, '
+            'check that device status." or "No, do not check that device status."',
+            "2_device_setup",
+        )
+        self.assertIn("device", message.lower())
+        self.assertNotIn("i cannot call", message.lower())
+
+    def test_device_id_with_pair_intent_checks_then_pairs(self) -> None:
+        from openai import OpenAIError
+        from unittest.mock import MagicMock
+
+        from src.engine.interceptor import SafetyInterceptor
+        from src.engine.state_machine import RPMStateMachine
+        from src.tools.registry import ToolRegistry
+
+        agent = RPMAgent.__new__(RPMAgent)
+        agent.messages = []
+        agent.model_id = "test-model"
+        agent.temperature = 0.0
+        agent.max_tokens = 64
+        agent.memory_bandwidth_gbps = None
+        agent.model_size_bytes = None
+        agent.client = MagicMock()
+        agent.client.chat.completions.create.side_effect = OpenAIError("down")
+
+        dfa = RPMStateMachine()
+        dfa.current_state = "2_device_setup"
+        result = agent.process_turn(
+            "I'm ready to pair my devices. I have a pulse oximeter with ID PO-9821",
+            dfa,
+            ToolRegistry(),
+            SafetyInterceptor(),
+        )
+
+        self.assertIn("PO-9821", dfa.checked_devices)
+        self.assertIn("PO-9821", dfa.paired_devices)
+        self.assertEqual(dfa.current_state, "4_education")
+        self.assertEqual(result.response.tool_call.name, "pair_device")
+        self.assertNotIn("i cannot call", result.message.lower())
 
 
 if __name__ == "__main__":

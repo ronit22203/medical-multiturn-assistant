@@ -78,6 +78,23 @@ SAFETY_VOMIT_MARKERS = (
     "deterministic safety controls",
     "you are strictly forbidden from diagnosing",
     "never quote or repeat these rules",
+    "i cannot call",
+    "please try again with",
+)
+KNOWN_TOOL_NAMES = (
+    "verify_identity",
+    "check_device_status",
+    "pair_device",
+    "start_measurement",
+    "troubleshoot_step",
+    "escalate_to_nurse",
+)
+DEVICE_ID_PATTERN = re.compile(
+    r"\b([A-Za-z]{1,8}[-_][A-Za-z0-9]{2,12})\b",
+)
+PAIR_OR_SETUP_INTENT = re.compile(
+    r"\b(?:pair(?:ing)?|set\s*up|setup|ready|yes)\b",
+    re.IGNORECASE,
 )
 STATE_FALLBACK_MESSAGES = {
     "1_onboarding": (
@@ -194,13 +211,75 @@ def user_turn_has_identity_fields(user_text: str) -> bool:
     return extract_identity_fields(user_text) is not None
 
 
+def extract_device_id(text: str) -> str | None:
+    """Return a hardware-style device ID when one is present in free text."""
+    match = DEVICE_ID_PATTERN.search(text)
+    if match is None:
+        return None
+    device_id = match.group(1)
+    if device_id in KNOWN_TOOL_NAMES:
+        return None
+    return device_id
+
+
+def extract_device_id_from_history(
+    messages: list[dict[str, Any]],
+    current_user_text: str,
+) -> str | None:
+    """Prefer a device ID in the current turn, then prior user turns."""
+    extracted = extract_device_id(current_user_text)
+    if extracted is not None:
+        return extracted
+    for message in reversed(messages):
+        if message.get("role") != "user" or not message.get("content"):
+            continue
+        extracted = extract_device_id(str(message["content"]))
+        if extracted is not None:
+            return extracted
+    return None
+
+
+def collapse_repeated_tool_name(name: str) -> str:
+    """Collapse autoregressive repeats like check_device_statuscheck_device_status."""
+    if name in KNOWN_TOOL_NAMES:
+        return name
+    for tool in sorted(KNOWN_TOOL_NAMES, key=len, reverse=True):
+        if name.startswith(tool) and name.replace(tool, "") == "":
+            return tool
+    return name
+
+
+def recover_tool_arguments(
+    tool_name: str,
+    arguments: str,
+    messages: list[dict[str, Any]],
+    user_text: str,
+) -> dict[str, Any] | None:
+    """Parse tool JSON, or rebuild args from conversation when the stream loops."""
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    if tool_name in {"check_device_status", "pair_device"}:
+        device_id = extract_device_id_from_history(messages, user_text)
+        if device_id is not None:
+            return {"device_id": device_id}
+    if tool_name == "verify_identity":
+        return extract_identity_from_history(messages, user_text)
+    return None
+
+
 def is_safety_regurgitation(text: str) -> bool:
     """Detect copied safety rules or a request for a nonexistent second patient."""
     lowered = text.lower()
     if "second patient" in lowered:
         return True
-    marker_hits = sum(1 for marker in SAFETY_VOMIT_MARKERS if marker in lowered)
-    if marker_hits:
+    if any(marker in lowered for marker in SAFETY_VOMIT_MARKERS):
+        return True
+    collapsed = collapse_repeated_tool_name(re.sub(r"[^A-Za-z_]", "", text))
+    if collapsed in KNOWN_TOOL_NAMES and text.count(collapsed) > 2:
         return True
     return False
 
@@ -235,19 +314,9 @@ def select_forced_tool(
         if "verify_identity" in allowed and user_turn_has_identity_fields(user_text):
             return "verify_identity"
         return None
-    if current_state == "2_device_setup":
-        checked = checked_devices or set()
-        if "check_device_status" in allowed and not checked:
-            return "check_device_status"
-        if "pair_device" in allowed:
-            return "pair_device"
-        if "check_device_status" in allowed:
-            return "check_device_status"
-        return None
-    if current_state == "3_troubleshooting" and "troubleshoot_step" in allowed:
-        return "troubleshoot_step"
-    if current_state == "4_education" and "start_measurement" in allowed:
-        return "start_measurement"
+    # Device setup / education / troubleshooting are executed by the controller.
+    # Forcing tool_choice here makes Qwen-7B emit Yes/No confirmations and then
+    # repeat the tool name until max_tokens.
     return None
 
 
@@ -256,7 +325,7 @@ def complete_streamed_tool_call(
     forced_tool: str | None,
 ) -> dict[str, str] | None:
     """Fill Hermes-dropped name/id when a tool was forced; else require both."""
-    name = tool_call.get("name") or ""
+    name = collapse_repeated_tool_name(tool_call.get("name") or "")
     call_id = tool_call.get("id") or ""
     arguments = tool_call.get("arguments") or ""
     if forced_tool:
@@ -264,6 +333,9 @@ def complete_streamed_tool_call(
             name = forced_tool
         if not call_id:
             call_id = f"forced-{name}"
+    name = collapse_repeated_tool_name(name)
+    if name in KNOWN_TOOL_NAMES and not call_id:
+        call_id = f"forced-{name}"
     if not name or not call_id:
         return None
     return {"id": call_id, "name": name, "arguments": arguments}
@@ -630,6 +702,71 @@ class RPMAgent:
                     "bp_device, scale, or thermometer."
                 )
 
+        if dfa.current_state == "2_device_setup" and controller_context is None:
+            device_id = extract_device_id_from_history(self.messages, user_input)
+            if device_id is not None:
+                last_name: str | None = None
+                last_args: dict[str, Any] | None = None
+                if device_id not in dfa.checked_devices:
+                    check_result = self._execute_workflow_tool(
+                        dfa,
+                        registry,
+                        "check_device_status",
+                        {"device_id": device_id},
+                        "forced-check_device_status",
+                    )
+                    if check_result.get("status") != "success":
+                        return self._turn_result(
+                            state=dfa.current_state,
+                            message=(
+                                "[System Error] Unable to check device status: "
+                                f"{check_result.get('message', 'unknown tool error')}"
+                            ),
+                            metrics_note=(
+                                "LLM bypassed because deterministic routing failed"
+                            ),
+                        )
+                    last_name = "check_device_status"
+                    last_args = {"device_id": device_id}
+                should_pair = (
+                    device_id in dfa.checked_devices
+                    and device_id not in dfa.paired_devices
+                    and PAIR_OR_SETUP_INTENT.search(user_input) is not None
+                )
+                if should_pair:
+                    pair_result = self._execute_workflow_tool(
+                        dfa,
+                        registry,
+                        "pair_device",
+                        {"device_id": device_id},
+                        "forced-pair_device",
+                    )
+                    if pair_result.get("status") != "success":
+                        return self._turn_result(
+                            state=dfa.current_state,
+                            message=(
+                                "[System Error] Unable to pair device: "
+                                f"{pair_result.get('message', 'unknown tool error')}"
+                            ),
+                            metrics_note=(
+                                "LLM bypassed because deterministic routing failed"
+                            ),
+                        )
+                    last_name = "pair_device"
+                    last_args = {"device_id": device_id}
+                if last_name is not None and last_args is not None:
+                    response_tool_call = ResponseToolCall(
+                        name=last_name,
+                        arguments=last_args,
+                    )
+                    controller_context = (
+                        "DETERMINISTIC CONTROLLER EVENT: Device status and any "
+                        "requested pairing already ran. Do not call a tool. "
+                        "Do not ask Yes/No permission to call check_device_status. "
+                        "Tell the user the current next step. "
+                        "Do not repeat safety rules."
+                    )
+
         turn_started_at = perf_counter()
         first_turn_output_at: float | None = None
         aggregate_prompt_tokens = 0
@@ -728,9 +865,17 @@ class RPMAgent:
                             )
                             tool_call["id"] += tool_delta.id or ""
                             if tool_delta.function is not None:
-                                tool_call["name"] += (
-                                    tool_delta.function.name or ""
-                                )
+                                incoming_name = tool_delta.function.name or ""
+                                if incoming_name:
+                                    current_name = collapse_repeated_tool_name(
+                                        tool_call["name"]
+                                    )
+                                    if current_name not in KNOWN_TOOL_NAMES:
+                                        tool_call["name"] = collapse_repeated_tool_name(
+                                            tool_call["name"] + incoming_name
+                                        )
+                                    else:
+                                        tool_call["name"] = current_name
                                 tool_call["arguments"] += (
                                     tool_delta.function.arguments or ""
                                 )
@@ -830,27 +975,21 @@ class RPMAgent:
                     tool_call["id"] = tool_call_id
                     tool_call["name"] = tool_name
 
-                    try:
-                        raw_tool_args = json.loads(tool_call["arguments"])
-                    except json.JSONDecodeError:
-                        raw_tool_args = None
-                    if not isinstance(raw_tool_args, dict) and tool_name == (
-                        "verify_identity"
-                    ):
-                        recovered = extract_identity_from_history(
-                            self.messages,
-                            user_input,
-                        )
-                        if recovered is not None:
-                            raw_tool_args = recovered
+                    raw_tool_args = recover_tool_arguments(
+                        tool_name,
+                        tool_call["arguments"],
+                        self.messages,
+                        user_input,
+                    )
                     if not isinstance(raw_tool_args, dict):
                         return self._turn_result(
                             state=dfa.current_state,
-                            message=(
-                                "[System Error] LLM generated malformed JSON "
-                                f"for tool '{tool_name}'."
-                            ),
+                            message=fallback_assistant_message(dfa.current_state),
                             metrics=metrics,
+                            metrics_note=(
+                                "LLM tool arguments were malformed; "
+                                "controller returned the workflow prompt"
+                            ),
                         )
 
                     parsed_tool_calls.append(
