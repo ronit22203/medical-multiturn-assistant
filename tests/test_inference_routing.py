@@ -380,6 +380,21 @@ class DeviceSetupControllerTests(unittest.TestCase):
         self.assertIn("spo2_percent", registry.recorded_readings["spo2"])
         self.assertEqual(dfa.current_state, "5_closing")
 
+    def test_patient_reported_vitals_override_simulator(self) -> None:
+        from src.agent.inference import extract_reported_readings
+
+        spo2 = extract_reported_readings(
+            "Starting my measurement my SpO2 is 97% and my heart rate is 72 bpm"
+        )
+        self.assertEqual(spo2["spo2"]["spo2_percent"], 97.0)
+        self.assertEqual(spo2["spo2"]["pulse_bpm"], 72)
+
+        bp = extract_reported_readings(
+            "Wait i just put on the blood pressure cuff and it reads 198/122 mmHG"
+        )
+        self.assertEqual(bp["bp"]["systolic_mmhg"], 198)
+        self.assertEqual(bp["bp"]["diastolic_mmhg"], 122)
+
 
 if __name__ == "__main__":
     unittest.main()

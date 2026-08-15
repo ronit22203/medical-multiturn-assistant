@@ -101,6 +101,19 @@ MEASURE_INTENT = re.compile(
     r"blood\s*pressure|\bbp\b|take)\b",
     re.IGNORECASE,
 )
+REPORTED_SPO2_PATTERN = re.compile(
+    r"\b(?:spo2|sp\s*o2|oxygen)\b[^\d]{0,24}(\d{2,3}(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+REPORTED_HR_PATTERN = re.compile(
+    r"\b(?:heart\s*rate|pulse|hr)\b[^\d]{0,24}(\d{2,3})",
+    re.IGNORECASE,
+)
+REPORTED_BP_PATTERN = re.compile(
+    r"(?:(?:bp|blood\s+pressure)[^\d]{0,24})?"
+    r"(\d{2,3})\s*/\s*(\d{2,3})\s*(?:mm\s*h?g)",
+    re.IGNORECASE,
+)
 STATE_FALLBACK_MESSAGES = {
     "1_onboarding": (
         "Please provide your first name, last name, and date of birth."
@@ -237,6 +250,27 @@ def infer_measurement_type(text: str, device_id: str | None = None) -> str | Non
     if prefix in {"TEMP", "TH"}:
         return "temperature"
     return None
+
+
+def extract_reported_readings(text: str) -> dict[str, dict]:
+    """Parse patient-stated vitals so the UI is not a random simulator roll."""
+    found: dict[str, dict] = {}
+    spo2_match = REPORTED_SPO2_PATTERN.search(text)
+    hr_match = REPORTED_HR_PATTERN.search(text)
+    if spo2_match is not None:
+        spo2: dict = {"spo2_percent": float(spo2_match.group(1))}
+        if hr_match is not None:
+            spo2["pulse_bpm"] = int(hr_match.group(1))
+        found["spo2"] = spo2
+    elif hr_match is not None:
+        found["spo2"] = {"pulse_bpm": int(hr_match.group(1))}
+    bp_match = REPORTED_BP_PATTERN.search(text)
+    if bp_match is not None:
+        found["bp"] = {
+            "systolic_mmhg": int(bp_match.group(1)),
+            "diastolic_mmhg": int(bp_match.group(2)),
+        }
+    return found
 
 
 def extract_device_id(text: str) -> str | None:
@@ -828,6 +862,23 @@ class RPMAgent:
                             "LLM bypassed because deterministic routing failed"
                         ),
                     )
+                reported = extract_reported_readings(user_input)
+                if measurement_type in reported:
+                    merged = {
+                        **(measure_result.get("readings") or {}),
+                        **{
+                            key: value
+                            for key, value in reported[measurement_type].items()
+                            if value is not None
+                        },
+                    }
+                    measure_result["readings"] = merged
+                    registry.recorded_readings[measurement_type] = merged
+                    if (
+                        self.messages
+                        and self.messages[-1].get("role") == "tool"
+                    ):
+                        self.messages[-1]["content"] = json.dumps(measure_result)
                 response_tool_call = ResponseToolCall(
                     name="start_measurement",
                     arguments=measure_args,
@@ -835,6 +886,7 @@ class RPMAgent:
                 controller_context = (
                     "DETERMINISTIC CONTROLLER EVENT: start_measurement already "
                     f"ran for {device_id}. Readings: {measure_result.get('readings')}. "
+                    "Quote these exact numbers. Do not invent different vitals. "
                     "Do not call a tool. Acknowledge receipt without interpreting "
                     "the values. Do not repeat safety rules."
                 )

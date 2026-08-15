@@ -4,7 +4,11 @@ from datetime import datetime
 
 import streamlit as st
 
-from src.agent.inference import RPMAgent, InferenceMetrics
+from src.agent.inference import (
+    InferenceMetrics,
+    RPMAgent,
+    extract_reported_readings,
+)
 from src.engine.state_machine import RPMStateMachine
 from src.engine.interceptor import SafetyInterceptor
 from src.tools.registry import ToolRegistry
@@ -23,18 +27,6 @@ MEASUREMENT_TYPE_ALIASES = {
     "temperature": "temperature",
     "temp": "temperature",
 }
-CHAT_SPO2_PATTERN = re.compile(
-    r"\b(?:spo2|sp\s*o2|oxygen)\b[^\d]{0,24}(\d{2,3}(?:\.\d+)?)",
-    re.IGNORECASE,
-)
-CHAT_HR_PATTERN = re.compile(
-    r"\b(?:heart\s*rate|pulse|hr)\b[^\d]{0,24}(\d{2,3})",
-    re.IGNORECASE,
-)
-CHAT_BP_PATTERN = re.compile(
-    r"(?:BP|blood pressure)[^\d]{0,20}(\d{2,3})\s*/\s*(\d{2,3})",
-    re.IGNORECASE,
-)
 
 
 def normalize_measurement_type(mtype: str, readings: dict) -> str:
@@ -77,43 +69,26 @@ def harvest_device_readings(agent_messages: list) -> dict:
 
 
 def harvest_readings_from_chat(messages: list) -> dict:
-    """Backfill the pane when the model quoted a saved reading in prose."""
+    """Prefer patient-stated vitals over simulated tool rolls and model quotes."""
     found: dict = {}
-    spo2_value = None
-    hr_value = None
     for message in messages:
-        if message.get("role") != "assistant":
+        if message.get("role") not in {"user", "assistant"}:
             continue
         content = str(message.get("content") or "")
-        spo2_match = CHAT_SPO2_PATTERN.search(content)
-        if spo2_match:
-            spo2_value = float(spo2_match.group(1))
-        hr_match = CHAT_HR_PATTERN.search(content)
-        if hr_match:
-            hr_value = int(hr_match.group(1))
-        bp_match = CHAT_BP_PATTERN.search(content)
-        if bp_match:
-            found["bp"] = {
-                "systolic_mmhg": int(bp_match.group(1)),
-                "diastolic_mmhg": int(bp_match.group(2)),
-            }
-    if spo2_value is not None:
-        found["spo2"] = {
-            "spo2_percent": spo2_value,
-            "pulse_bpm": hr_value,
-        }
+        for mtype, readings in extract_reported_readings(content).items():
+            existing = found.get(mtype, {})
+            found[mtype] = {**existing, **readings}
     return found
 
 
 def collect_ui_readings(agent, registry, chat_messages: list) -> dict:
-    """Merge registry log, tool payloads, and chat quotes into one map."""
+    """Simulator first, then tool payloads, then patient-reported numbers win."""
     combined: dict = {}
     for mtype, readings in getattr(registry, "recorded_readings", {}).items():
         if isinstance(readings, dict) and readings:
             combined[normalize_measurement_type(mtype, readings)] = readings
     combined.update(harvest_device_readings(getattr(agent, "messages", [])))
-    for mtype, readings in harvest_readings_from_chat(chat_messages).items():
-        combined.setdefault(mtype, readings)
+    combined.update(harvest_readings_from_chat(chat_messages))
     return combined
 
 
